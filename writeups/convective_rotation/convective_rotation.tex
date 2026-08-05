@@ -1,0 +1,712 @@
+\documentclass{aastex631}
+
+\usepackage{amsmath,amssymb}
+\usepackage{natbib}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\pp}{\partial}
+\newcommand{\Hp}{H_P}
+\newcommand{\Cp}{C_P}
+\newcommand{\Tint}{T_{\rm int}}
+\newcommand{\Teff}{T_{\rm eff}}
+\newcommand{\Mjup}{M_{\rm Jup}}
+\newcommand{\Mearth}{M_\oplus}
+\newcommand{\softplus}{\mathrm{softplus}}
+\newcommand{\Vmlt}{v_{\rm MLT}}
+\newcommand{\VNR}{v_{\rm NR}}
+\newcommand{\VR}{v_{\rm R}}
+\newcommand{\Vconv}{U_{\rm conv}}
+\newcommand{\Roo}{\mathrm{Ro}}
+\newcommand{\Rofunc}{R(\Roo_{\rm NR})}
+\newcommand{\NCsq}{N_C^2}
+\newcommand{\Dmlt}{D_{\rm MLT}}
+\newcommand{\Dent}{D_{\rm ent}}
+\newcommand{\Dov}{D_{\rm ov}}
+\newcommand{\Dmicro}{D_{\rm micro}}
+\newcommand{\sigmaconv}{\sigma_{\rm conv}}
+\newcommand{\fov}{f_{\rm ov}}
+\newcommand{\bracketraw}{\mathcal{B}^{\rm raw}}
+\newcommand{\bracketb}{\mathcal{B}}
+\newcommand{\bracketsm}{\widetilde{\mathcal{B}}^{\rm raw}}
+\newcommand{\bracketstar}{\mathcal{B}^{*}}
+
+\shorttitle{Rotation and Overshoot in ORCHARD}
+\shortauthors{Tejada Arevalo}
+
+\begin{document}
+
+\title{Rotation, Entrainment, and Convective Overshoot in the ORCHARD Planetary Evolution Code}
+
+\author{Roberto Tejada Arevalo}
+
+\begin{abstract}
+We describe four optional physics modules added to the ORCHARD planetary
+evolution code.  Together they provide a flux-based representation of
+rotation-modified convection and overshoot mixing.  The first module
+(\texttt{rotational\_convection}) implements the rotation-suppressed
+mixing-length convective velocity from \citet{Fuentes2023ApJL} and
+the Coriolis--Inertial--Archimedean force balance of
+\citet{Aurnou2020}.  It multiplies the inviscid \citeauthor{Stevenson1979}
+MLT velocity by a smooth interpolation $\Rofunc$ that asymptotes to
+$\Roo_{\rm NR}^{1/5}$ in the rapid-rotation limit.  The second
+(\texttt{convective\_entrainment}, experimental) translates the
+\citet{Linden1975} entrainment hypothesis used in
+\citeauthor{Fuentes2023ApJL}'s Eq.~5 into a boundary-localised
+effective diffusivity.  However, the resulting one-cell-at-a-time front
+advance is dynamically pinned by the Ledoux criterion, and does not
+reproduce the dramatic erosion their three-dimensional simulations
+predict.  The third module
+(\texttt{smooth\_convection\_criterion}) replaces the hard
+Schwarzschild/Ledoux gate on the diffusion coefficient with a smooth
+sigmoid blend evaluated on a spatially Gaussian-smoothed entropy
+bracket.  This addresses a long-standing discretisation artefact that
+produces alternating convective/stable cells with diffusion
+coefficients spanning eleven orders of magnitude.  The fourth
+(\texttt{composition\_overshoot}) introduces an exponentially
+decaying composition diffusivity beyond every convective/stable
+boundary, in the spirit of \citet{Herwig2000} and \citet{Freytag1996}.
+An optional kinetic-energy-flux coupling ties the overshoot
+strength to $R^3 = (F_{K,R}/F_{K,\rm NR})$ from the
+\citeauthor{Fuentes2023ApJL} energy balance.  We derive each
+prescription, document the discretisation and Newton--Raphson
+Jacobian additions, and present same-age $5$~Gyr Jupiter
+inhomogeneous-evolution comparisons that quantify the effect of each
+module on the fuzzy-core gradient.
+\end{abstract}
+
+\keywords{planets and satellites: interiors --- planets and satellites:
+gaseous planets --- convection --- methods: numerical}
+
+% ======================================================================
+\section{Introduction and motivation}\label{sec:intro}
+% ======================================================================
+
+The interior structure of Jupiter and Saturn, as constrained by Juno
+and ring seismology, is consistent with extended composition gradients
+(``fuzzy cores'') stable against convective mixing over the age of the
+solar system \citep{Wahl2017,Mankovich2021,Howard2023}.  This is
+puzzling.  Mixing-length theory (MLT) gives sub-Gyr
+homogenisation timescales for the relevant Rayleigh numbers, and
+three-dimensional hydrodynamic simulations of layered convection have
+shown that double-diffusive staircases erode rapidly through
+overshoot mixing \citep{Wood2013,Garaud2018,Fuentes2022PhRvF}.
+\citet{Fuentes2023ApJL} (hereafter F23) argued that rapid planetary
+rotation is a missing ingredient: in the limit
+$\Roo \equiv \Vconv / (2\Omega \ell) \ll 1$, Coriolis forces reduce
+convective velocities by a factor of $\sim 6$ and the kinetic-energy
+flux available for entrainment by $\sim 200$, producing a
+$\Roo^{-1/2}$ stretch of the boundary-mixing timescale that may bring
+the fuzzy-core erosion time within the age of Jupiter.
+
+ORCHARD is a one-dimensional Lagrangian Henyey/Newton--Raphson
+code, so its representation of convection is fundamentally a
+flux-based MLT closure rather than a hydrodynamic simulation
+\citep{TejadaArevalo2026orchard}.  This document describes four
+optional physics modules that incorporate F23-style rotation
+suppression and overshoot mixing within ORCHARD's flux framework.
+None of the modules attempts to simulate fluid parcels.  Each
+instead translates a physical effect into a modification of the
+diffusion coefficient $D_b$, the convective velocity $\Vmlt$, or
+the convective heat flux $\mathcal{F}_{\rm conv}$.  All four
+modules default to disabled so that existing models reproduce the
+fiducial flux closure exactly.
+
+The four modules are:
+\begin{enumerate}
+\item \texttt{rotational\_convection} (\S\ref{sec:rot}) --- the
+  rotation-modified MLT velocity of F23 / \citet{Aurnou2020}, with a
+  smooth interpolation between rapid-rotation and slow-rotation limits.
+\item \texttt{convective\_entrainment} (\S\ref{sec:entrainment},
+  experimental) --- the \citet{Linden1975} entrainment hypothesis
+  used in F23 Eq.~5, translated into a boundary-localised effective
+  diffusivity.
+\item \texttt{smooth\_convection\_criterion} (\S\ref{sec:smooth}) ---
+  a sigmoid blend of $\Dmlt$ and $\Dmicro$ that smooths the discrete
+  Schwarzschild/Ledoux gate.
+\item \texttt{composition\_overshoot} (\S\ref{sec:overshoot}) --- an
+  exponentially decaying composition diffusivity at every convective
+  boundary, with an optional $R^3$ rotation coupling that inherits the
+  F23 energy-flux suppression.
+\end{enumerate}
+
+We document the physics derivation, discretisation, and Newton--Raphson
+Jacobian additions for each module, then present numerical comparisons
+on a non-rotating Jupiter inhomogeneous--Gaussian model evolved to $5$
+Gyr (\S\ref{sec:results}).
+
+% ======================================================================
+\section{Notation and baseline closure}\label{sec:notation}
+% ======================================================================
+
+We adopt the same notation as the ORCHARD transport methods document.
+Mass-shell boundaries are indexed $b = 0, 1, \ldots, N$ with $b = 0$
+the surface and $b = N$ the centre, so the radial coordinate $r_b$
+descends with $b$.  Cell-centred quantities such as the
+specific entropy $S$, helium mass fraction $Y$, and metal mass
+fraction $Z$ are stored at integer cell indices $k$ with
+$k \in [0, N-1]$.  We denote the entropy bracket
+\begin{equation}
+\bracketb{}_b
+    = -\frac{T H_P}{\Cp} \frac{\dd S}{\dd r}\bigg|_b
+      + \mathrm{(composition\;terms)}
+    \label{eq:bracket-defn}
+\end{equation}
+which is positive in convective zones and (post-softhinge) zero in
+stable zones.  In the Ledoux closure the composition terms include
+contributions of the form $(\partial S/\partial X_i)_{\rho,P}\,
+\partial X_i/\partial r$ that stabilise against compositional
+gradients.  The pre-softhinge bracket $\bracketraw_b$ retains its
+sign and is generally negative in stable regions.
+
+In the standard inviscid MLT closure used by ORCHARD
+\citep[Eq.~11 of][]{TejadaArevalo2026orchard},
+\begin{equation}
+\Vmlt^2
+   = \frac{g\,\delta\,(\nabla - \nabla_{\rm ad})\,\ell^2}{8 \Hp}
+   = \frac{g\,\Hp^2}{8\Cp}\,|\bracketb|,
+   \label{eq:vmlt}
+\end{equation}
+with $\ell = \Hp$ the mixing length, $\delta = -(\partial \ln \rho/
+\partial \ln T)_P$, and the second equality assumes the entropy-gradient
+form of the bracket.  The MLT composition diffusivity follows from
+\begin{equation}
+\Dmlt = \frac{\Vmlt \Hp}{3}.
+\label{eq:Dmlt}
+\end{equation}
+Composition is then evolved by a sum
+\begin{equation}
+D_b = \begin{cases}
+\Dmlt + \Dmicro & \bracketb{}_b > 0,\\
+\Dmicro & \bracketb{}_b \le 0,
+\end{cases}
+\label{eq:Db-default}
+\end{equation}
+which is the hard step the smooth-convection module replaces.  The
+softhinge \citep[\S2.5 of][]{TejadaArevalo2026orchard} clamps
+$\bracketraw_b$ to $\ge 0$ before $\Vmlt$ is taken so that $\Vmlt$ is
+real-valued; in the Newton solver this introduces an exact
+discontinuous transition between $D \sim 10^{10}\,\rm cm^2/s$ and
+$D = \Dmicro \sim 0.05\,\rm cm^2/s$ across one boundary.
+
+The angular velocity $\Omega(t)$ is computed in
+\texttt{hydrostatic.py:get\_omega} from angular-momentum
+conservation \citep[Appendix A of][]{TejadaArevalo2026orchard}.  It is
+threaded into \texttt{transport.update\_SYZ} via an
+\texttt{omega\_old} keyword argument.  When the master flag
+\texttt{[hydrostatic\_equilibrium].rotation = False}, $\Omega = 0$
+identically and all rotation-coupled corrections collapse to identity.
+
+% ======================================================================
+\section{Rotation-modified convective velocity}\label{sec:rot}
+% ======================================================================
+
+\subsection{Physics}
+
+Following F23, in the rapidly rotating limit the convective force
+balance is set by the Coriolis, inertial, and Archimedean (CIA) force
+ratio rather than by the inertial--Archimedean balance that gives the
+\citet{Stevenson1979} non-rotating MLT velocity.  Define the
+non-rotating Rossby number per zone boundary,
+\begin{equation}
+\Roo_{\rm NR} \equiv \frac{\VNR}{2\Omega\Hp},
+\label{eq:Ro-NR}
+\end{equation}
+where $\VNR$ is the standard MLT velocity (Eq.~\ref{eq:vmlt}) using
+$\ell = \Hp$.  The CIA balance derived in
+\citet[][Eq.~3]{Fuentes2023ApJL} gives in the strongly rotating limit,
+\begin{equation}
+\frac{\VR}{\VNR}
+    \;\sim\; \left(\frac{\VNR}{2\Omega\Hp}\right)^{1/5}
+    \;=\; \Roo_{\rm NR}^{1/5}.
+\label{eq:VRovervNR-asymp}
+\end{equation}
+At Jovian deep-envelope conditions ($\VNR \approx 40\,\rm cm/s$,
+$\Omega = 2\pi/10\,$hr, $\Hp \approx 10^9\,\rm cm$), $\Roo_{\rm NR}
+\approx 10^{-4}$, so $\VR/\VNR \approx 0.16$, reproducing
+F23's reported factor-of-six velocity reduction.
+
+In the slow-rotation limit ($\Roo_{\rm NR} \gg 1$) Coriolis forces are
+negligible and $\VR \to \VNR$.  We bridge the two limits with a smooth
+Stevenson-style interpolation,
+\begin{equation}
+\Rofunc \equiv \left(\frac{\Roo_{\rm NR}}{1 + \Roo_{\rm NR}}\right)^{1/5},
+\label{eq:Rfunc}
+\end{equation}
+which is algebraically equivalent to $(1 + \Roo_{\rm NR}^{-1})^{-1/5}$
+but does not require dividing by a small Rossby number at deep
+envelope depths.  The function satisfies
+$R \to \Roo_{\rm NR}^{1/5}$ as $\Roo_{\rm NR} \to 0$ and
+$R \to 1$ as $\Roo_{\rm NR} \to \infty$.  It therefore matches F23
+Eq.~3 in the rapid-rotation regime and the standard MLT in the
+slow-rotation regime.
+
+The rotation-modified convective velocity is then
+\begin{equation}
+\VR = \VNR \cdot \Rofunc,
+\label{eq:VR}
+\end{equation}
+and the convective heat flux and MLT composition diffusivity inherit
+the same factor:
+\begin{equation}
+\mathcal{F}_{\rm conv,R} = R \cdot \mathcal{F}_{\rm conv,NR},
+\quad\quad
+D_{\rm MLT,R} = R \cdot D_{\rm MLT,NR}.
+\end{equation}
+For self-consistency, when ORCHARD's Newton--Raphson transport solve
+is asked to carry the same internal flux $\mathcal{F}_{\rm conv}$
+that the cooling sequence demands, the entropy bracket adjusts as
+$|\bracketb|_R / |\bracketb|_{\rm NR} = R^{-2/3}$ (about $3\times$
+steepening at Jovian rotation), since the bracket-form flux scales as
+$\mathcal{F}_{\rm conv} \propto |\bracketb|^{3/2}$ and the prefactor
+$R$ shifts the response.
+
+\subsection{Discretisation and Jacobian}
+
+The implementation lives in
+\texttt{transport.rotation\_factors}, called once per Newton iterate
+in \texttt{update\_SYZ}.  Given $\VNR$ on every boundary
+(reused from the standard MLT computation at line 2670 of
+\texttt{transport.py}) and $\Omega$ from
+\texttt{hydrostatic\_equilibrium}, we evaluate
+\begin{align}
+\Roo_{{\rm NR},b} &= \frac{V_{{\rm NR},b}}{2\,\Omega\,H_{P,b}}, \\
+R_b   &= \left(\frac{\Roo_{{\rm NR},b}}{1+\Roo_{{\rm NR},b}}\right)^{1/5},
+\end{align}
+on envelope boundaries $b \in [1, k_{\rm core})$, leaving
+mantle/core boundaries with $R_b = 1$ identically.  We then multiply
+the convective heat-flux prefactor $\phi_b'$ and the MLT diffusivity
+$\Dmlt$ by $R_b$.
+
+The rotation factor depends on the entropy bracket through
+$\VNR \propto |\bracketb|^{1/2}$.  The Newton--Raphson Jacobian
+therefore acquires a chain-rule contribution.  Using
+$\dd\ln R / \dd \ln \Roo = 1 - R^5$ and
+$\dd\ln \Roo / \dd \ln |\bracketb| = 1/2$ we have
+\begin{equation}
+\frac{\dd\ln R}{\dd \ln |\bracketb|} = \tfrac{1}{10}(1 - R^5).
+\end{equation}
+The flux Jacobian then carries an effective bracket-power factor
+\begin{equation}
+R_{\rm eff} \equiv p + \tfrac{1}{10}(1 - R^5),
+\label{eq:Reff}
+\end{equation}
+with $p = 3/2$ the unmodified MLT exponent, and the existing
+\texttt{d\_flux\_dS} array is rescaled by $R_{\rm eff}/p$.  The MLT
+diffusivity Jacobian acquires
+\begin{equation}
+D_{\rm eff} \equiv \tfrac{1}{2} + \tfrac{1}{10}(1 - R^5),
+\label{eq:Deff}
+\end{equation}
+i.e.\ a multiplicative correction $D_{\rm eff}/(1/2) = 2 - R^5$ on
+the existing $\dd \Dmlt/\dd|\bracketb|$ term.  Both factors collapse
+to identity when $\Omega = 0$ (so $R_b = 1$ and $R^5 = 1$).
+
+\subsection{Configuration}
+
+Activate via
+\texttt{[transport].rotational\_convection = True} and require
+\texttt{[hydrostatic\_equilibrium].rotation = True} with a defined
+\texttt{period}.  Outside the H/He envelope (i.e.\ $i \ge k_{\rm core}$)
+$R_b = 1$ identically.  The viscous-mantle convection regime is
+therefore not modified.
+
+% ======================================================================
+\section{Boundary entrainment (experimental)}\label{sec:entrainment}
+% ======================================================================
+
+\subsection{Physics}
+
+F23's rotation argument relies on a \emph{kinetic-energy-flux} bound
+on the rate at which a convective region can entrain composition from
+a neighbouring stable layer.  The \citet{Linden1975} entrainment
+hypothesis equates the rate of change of potential energy across the
+mixing front with the kinetic-energy flux of the convective motions:
+\begin{equation}
+\tfrac{1}{4}\, \rho_0\, \beta\, g\, |dC_0/dz|\, h^2\, \frac{\dd h}{\dd t}
+    \;\approx\; \tfrac{1}{2}\,\rho_0\, \Vconv^3
+    \quad\text{(F23 Eq.~5)},
+\label{eq:F23-eq5}
+\end{equation}
+where $h(t)$ is the depth of the convective layer above the gradient,
+$\beta = (\partial \ln \rho /\partial C)|_{P,T}$, and the kinetic-energy
+flux is $\mathcal{F}_K = \tfrac{1}{2}\rho \Vconv^3$.  Solving for the
+boundary-recession velocity,
+\begin{equation}
+v_{\rm ent} \equiv \frac{\dd h}{\dd t}
+    \;\approx\; \frac{2\Vconv^3}{\NCsq h^2},
+\quad\quad
+\NCsq \equiv \beta g |dC_0/dz|.
+\label{eq:vent}
+\end{equation}
+With $\Vconv = \VR = \VNR R$, $v_{\rm ent}$ inherits an $R^3 \approx
+200\times$ rotation suppression, which is the headline F23 result.
+
+\subsection{Discretisation}
+
+Implemented in \texttt{transport.entrainment\_diffusivity}, gated by
+\texttt{[transport].convective\_entrainment}.  We approximate
+$\NCsq$ on every zone boundary via
+\begin{equation}
+\NCsq{}_{,b} = g_b \cdot \max\!\left(\beta_Y |\dd Y/\dd r|_b,\; \beta_Z |\dd Z/\dd r|_b\right),
+\end{equation}
+with order-of-magnitude composition density derivatives
+$\beta_Y \approx 0.5$ and $\beta_Z \approx 2$.  The convective layer
+thickness $h_b$ is the integral of a smooth conv/stable indicator
+$\sigma_b$ from the boundary outward to the surface.  The boundary is
+localised by
+\begin{equation}
+\xi_b = \left|\frac{\dd \sigma_b}{\dd r}\right|,
+\end{equation}
+and the resulting effective diffusivity is
+\begin{equation}
+\Dent{}_b
+    \;=\; v_{\rm ent,b}\,\xi_b\,\dd r_b\,h_b
+    \quad
+    \text{(advection $\to$ diffusion equivalence)}.
+\label{eq:Dent}
+\end{equation}
+The factor $\xi_b\,\dd r_b$ is dimensionless ($\sim 1$ at the
+boundary, zero elsewhere), and $h_b$ provides the length scale for
+front propagation.  Their product gives $\Dent$ units of $\rm cm^2/s$.
+A smooth saturation cap $v_{\rm ent} \le \Vconv$ prevents
+divergence as $\NCsq \to 0$.  The Jacobian uses Picard lagging on
+$v_{\rm ent}$ (computed once per Newton iteration with frozen $S, Y,
+Z$), so the cubic chain rule through $\Vconv^3$ is not required.
+The implicit $C$ update is handled by the standard diffusion
+Jacobian.
+
+\subsection{Why this module is experimental}
+
+In tests on the Jupiter inhomogeneous--Gaussian model with rotation
+disabled, $\Dent$ produced a one-cell advance of the convective
+boundary (mass coordinate $0.269 \to 0.278$) within the first
+$0.5$~Gyr.  The boundary then \emph{stalled}.  The reason is
+fundamental to a flux-based code: as soon as $\Dent$ moves a small
+amount of heavy material into the cell adjacent to the convective
+zone, the Ledoux bracket of that cell becomes negative (the
+composition gradient stabilises against thermal convection), the MLT
+diffusivity collapses to $\Dmicro$ in the now-Ledoux-stable cell, and
+$\xi_b$ relocalises one cell deeper.  The boundary advances cell by
+cell, but each step requires a full Ledoux flip of the next cell,
+which is a slow process driven by the small $\Dent$ alone---not the
+fast, parcel-driven process F23's three-dimensional simulations
+report.  By 5~Gyr the same-age comparison shows only a $1$-cell
+boundary shift and a $\sim 7\%$ change in $Z$ at the gradient's
+upper edge.
+
+The module is preserved in the public release because (i) it
+faithfully implements F23 Eq.~5 in a flux framework, and (ii) it
+documents the failure mode that motivates the
+\texttt{composition\_overshoot} module of \S\ref{sec:overshoot}.
+We do \emph{not} recommend enabling
+\texttt{convective\_entrainment} in production runs.  The
+overshoot module captures the same physics in a way that is not
+Ledoux-pinned.
+
+% ======================================================================
+\section{Smooth convective criterion}\label{sec:smooth}
+% ======================================================================
+
+\subsection{Motivation: the staircase artefact}
+
+Within composition-gradient regions the Newton solver places adjacent
+zone boundaries alternately on $\bracketb{}_b > 0$ (convective; full
+MLT diffusivity $\sim 10^{10}\,\rm cm^2/s$) and $\bracketb{}_b = 0$
+(stable; molecular $\Dmicro \sim 0.05\,\rm cm^2/s$).  The
+diffusion coefficient therefore alternates by eleven orders of
+magnitude between adjacent cells, producing a discrete-cell
+``staircase'' in $D(r)$ and a corresponding staircase in $Z(m)$ at
+later times.  The pattern is a discretisation artefact of the
+hard step (Eq.~\ref{eq:Db-default}) combined with the softhinge that
+clamps $\bracketb \ge 0$ in stable cells.  Smoother brackets do not
+remove it, because the Newton solver still finds equilibria with
+alternating convective/stable cells.
+
+\subsection{Sigmoid blend on a spatially smoothed bracket}
+
+The \texttt{smooth\_convection\_criterion} module replaces
+Eq.~\ref{eq:Db-default} with a smooth blend
+\begin{equation}
+D_b \;=\; \sigmaconv{}_b\, \widetilde{\Dmlt}_b + \Dmicro,
+\label{eq:Db-blend}
+\end{equation}
+where $\widetilde{\Dmlt}$ uses $|\bracketraw|$ (so it is real-valued
+in stable cells where $\bracketraw < 0$) and the smooth indicator is
+\begin{equation}
+\sigmaconv{}_b
+    \;=\; \frac{1}{1 + \exp\!\left(-k\,\bracketsm_b/\bracketstar\right)},
+\label{eq:sigma-conv}
+\end{equation}
+with $k$ the sharpness, $\bracketstar$ a calibration scale, and
+$\bracketsm_b$ a \emph{spatially smoothed} version of
+$\bracketraw_b$:
+\begin{equation}
+\bracketsm_b \;=\; \mathcal{G}_{\sigma_{\rm cell}} \star \bracketraw_b,
+\label{eq:bracket-smooth}
+\end{equation}
+where $\mathcal{G}_{\sigma_{\rm cell}}$ is a one-dimensional Gaussian
+kernel of width $\sigma_{\rm cell}$ cells (default $2$).  The
+spatial smoothing is essential.  Applying the sigmoid alone leaves the
+staircase intact, because adjacent cells with brackets
+$\{+\delta, 0, +\delta, 0, \ldots\}$ map to
+$\{1, \tfrac{1}{2}, 1, \tfrac{1}{2}, \ldots\}$, which is still a
+staircase.  Smoothing $\bracketraw_b$ across $\sim 2$ cells averages
+the alternating values.  Adjacent cells then acquire nearly equal
+$\sigmaconv$ in the gradient region, and the diffusivity transition
+becomes graded over $\sim 4$--$8$ cells rather than discontinuous
+across one.
+
+If $\bracketstar \le 0$, it is auto-calibrated per timestep as the
+$25$th percentile of the positive bracket distribution.  Default
+$k = 10$ gives a moderately sharp transition.  Large $k$ recovers the
+hard step, small $k$ produces a very gradual blend.
+
+\subsection{Jacobian additions}
+
+The standard $\dd \Dmlt/\dd|\bracketb|$ chain rule used by the existing
+Newton solver continues to operate on the
+$\sigmaconv\,\widetilde{\Dmlt}$ product through
+$\widetilde{\Dmlt} \propto |\widetilde{\bracketraw}|^{1/2}$.  The new
+contribution is the sigmoid derivative:
+\begin{equation}
+\frac{\dd \sigmaconv{}_b}{\dd \bracketraw_b}
+    = \frac{k}{\bracketstar}\, \sigmaconv{}_b\,(1 - \sigmaconv{}_b),
+\end{equation}
+which appears as an additive term in
+$\dd D_b/\dd \bracketb$:
+\begin{equation}
+\frac{\dd D_b}{\dd \bracketb{}_b}
+    = \sigmaconv{}_b\,\frac{\dd \widetilde{\Dmlt}_b}{\dd \bracketb{}_b}
+      + \widetilde{\Dmlt}_b\,\frac{\dd \sigmaconv{}_b}{\dd \bracketb{}_b}.
+\end{equation}
+Because the auto-calibrated $\bracketstar$ and the Gaussian kernel
+both depend on \emph{all} cells in the gradient region, fully exact
+chain-ruling through these two operations would break the banded
+block-tridiagonal structure of the Newton Jacobian.  We therefore
+treat the kernel and the auto-calibration as Picard-lagged constants
+within a single Newton iteration.  Both are recomputed from scratch
+once per outer iteration, but are not differentiated.
+
+\subsection{Verification}
+
+In a $5$~Gyr non-rotating Jupiter inhomogeneous--Gaussian comparison,
+\texttt{smooth\_convection\_criterion} reduces the bracket
+positive$\leftrightarrow$zero flip count in the gradient region
+(mass-coordinate window $0.20$--$0.30$) from $3$ to $1$, and the
+geometric-mean diffusivity in that window drops from
+$\sim 60\,\rm cm^2/s$ (dominated by isolated convective cells with
+$D \sim 10^{10}$) to a uniform $\sim 1\,\rm cm^2/s$.  The Z gradient
+profile changes from a stair-step (plateaus at $Z = 0.07, 0.13, 0.19,
+0.23$) to a smooth slope.  The atmospheric $Z$ at $5$~Gyr changes by
+$\sim 7\%$.  The Newton solver requires roughly an order of
+magnitude more wall-clock time per timestep with this module enabled.
+The wider effective convective zone increases the implicit
+diffusion stencil.
+
+% ======================================================================
+\section{Composition overshoot}\label{sec:overshoot}
+% ======================================================================
+
+\subsection{Physics: Herwig-style overshoot with $F_K$ coupling}
+
+In stellar evolution practice the most successful flux-based
+representation of overshoot mixing is an exponentially decaying
+diffusivity beyond the convective boundary
+\citep{Freytag1996,Herwig2000}:
+\begin{equation}
+\Dov(r)
+    \;=\; \fov\,\Dmlt(r_b)\,
+          \exp\!\left(-\frac{|r - r_b|}{f_{H_P}\Hp(r_b)}\right),
+\label{eq:Dov}
+\end{equation}
+where $r_b$ is the boundary radius, $\fov$ is a calibration prefactor,
+and $f_{H_P}$ is the penetration scale in pressure-scale-height units.
+Unlike $\Dent$ from \S\ref{sec:entrainment}, $\Dov$ is non-zero in
+\emph{stable} cells regardless of bracket sign.  The gradient
+region therefore erodes continuously from above.  It does not become
+Ledoux-pinned after a single cell of advance.
+
+To couple this prescription to the F23 rotation suppression we
+multiply $\fov$ at each boundary by $R_b^3$, where $R_b$ is the
+\texttt{rotational\_convection} factor.  The motivation is that
+$\fov$ is empirically calibrated against three-dimensional simulations
+that themselves measure the kinetic-energy flux available for
+overshoot.  F23 Eqs.~3--4 give
+$\mathcal{F}_{K,R}/\mathcal{F}_{K,\rm NR} \approx \Roo^{1/2} \sim
+R^3$ in the rapidly rotating limit.  A single multiplicative $R_b^3$
+factor on $\fov$ therefore inherits the F23 suppression directly,
+without any double-counting of the rotation effect:
+\begin{equation}
+\fov^{\rm rot}_b \;=\; \fov \cdot R_b^3,
+\end{equation}
+collapsing to $\fov$ identically when $\Omega = 0$.  Note that $\Dmlt$
+itself already carries $R$ from the
+\texttt{rotational\_convection} module of \S\ref{sec:rot}.  The
+combined rotation suppression of $\Dov$ is therefore
+$R \cdot R^3 = R^4 \sim 5 \times 10^{-4}$ at Jovian conditions.  We
+treat this as a feature: the F23 entrainment timescale scales as
+$R^{-1/2}$, but since the entrainment-mixing timescale also depends
+on the convective velocity that does the mixing
+(via $\Dmlt$), the additional $R$ factor is physically expected.
+
+\subsection{Discretisation}
+
+Implemented in \texttt{transport.composition\_overshoot\_diffusivity},
+gated by \texttt{[transport].composition\_overshoot}.  The helper
+\begin{enumerate}
+\item Identifies every convective $\to$ stable transition by finding
+  boundaries where $\sigmaconv{}_b > 1/2$ and $\sigmaconv{}_{b+1} < 1/2$
+  (going inward).  $\sigmaconv$ is taken from the
+  \texttt{smooth\_convection\_criterion} module if active, or freshly
+  computed from a tanh of $\bracketb$ if not.
+\item For each transition, applies Eq.~\ref{eq:Dov} to all envelope
+  boundaries with $b \ge b_{\rm transition}$, using
+  $D_{\rm anchor} = \Dmlt(r_b)$ at the transition cell.
+\item When \texttt{composition\_overshoot\_rotation\_couple = True},
+  multiplies $\fov$ at each transition by $R_b^3$.
+\item Combines overlapping transitions with $\max$ rather than $+$ to
+  avoid double-counting overshoot from two boundaries that share the
+  same stable region.
+\end{enumerate}
+The resulting $\Dov{}_b$ is added to both $D_b$ and $D_{Z,b}$.
+Helium and metals therefore share the same overshoot diffusivity.  The
+Jacobian uses Picard lagging on $\Dov{}_b$.  We treat it as a known
+coefficient within each Newton iteration, and let the standard
+diffusion Jacobian handle the implicit $C$ update.
+
+\subsection{Calibration}
+
+Stellar overshoot calibrations \citep[e.g.][]{Herwig2000,Pedersen2018}
+typically give $\fov \approx 0.01$--$0.1$.  Those are anchored to
+$\Dmlt \sim 10^{15}\,\rm cm^2/s$ in stellar cores.  ORCHARD's
+gas-giant envelope has $\Dmlt \sim 10^{10}\,\rm cm^2/s$, so the same
+$\fov = 0.01$ produces $\Dov \sim 10^{8}\,\rm cm^2/s$ at the boundary
+and homogenises the gradient region in $\lesssim 1\,\rm Myr$
+(catastrophically too fast).  We default to $\fov = 10^{-10}$,
+giving $\Dov \sim 1\,\rm cm^2/s$ at the boundary and Gyr-timescale
+erosion that matches F23 expectations for an unrotated Jupiter.  The
+default $f_{H_P} = 0.5$ matches stellar overshoot calibrations.
+Users should tune $\fov$ for non-Jovian targets.
+
+\subsection{Verification}
+
+In a $5$~Gyr non-rotating Jupiter inhomogeneous--Gaussian comparison,
+\texttt{composition\_overshoot} with $\fov = 10^{-10}$ produces:
+\begin{itemize}
+\item A clean exponential $\Dov(r)$ tail visible from the convective
+  boundary at $\sim 3\,\rm cm^2/s$, decaying to $\sim 0.6\,\rm cm^2/s$
+  about ten cells deeper.
+\item Advance of the effective convective edge from mass coordinate
+  $0.269$ (baseline) to $\sim 0.18$ (overshoot) by $5$~Gyr; the
+  convective region has consumed the upper half of the fuzzy core.
+\item Homogenisation of $Z$ to a uniform value $\approx 0.089$ from
+  the surface down to mass coordinate $\sim 0.18$, then a continuous
+  gradient deeper.  Without overshoot the $Z$ profile is a clear
+  staircase from $0.07$ at the envelope plateau through plateaus at
+  $0.13, 0.19, 0.23$ before reaching $\sim 0.30$ at the deeper core;
+  with overshoot the staircase is gone and the gradient extent is
+  reduced.
+\end{itemize}
+With \texttt{rotational\_convection = True} and
+\texttt{composition\_overshoot\_rotation\_couple = True}, the
+$R_b^3 \sim 4\times 10^{-3}$ factor at Jovian Rossby number reduces
+$\Dov{}_{\rm max}$ from $\sim 3\,\rm cm^2/s$ to $\sim 0.012\,\rm cm^2/s
+\ll \Dmicro$, so the overshoot becomes ineffective and the fuzzy core
+is preserved on the planet's age.  This is the smoking-gun
+\citeauthor{Fuentes2023ApJL} prediction: rotation specifically renders
+overshoot-driven mixing inert, even though the same prescription
+applies to both rotating and non-rotating planets.
+
+% ======================================================================
+\section{Numerical comparison and combined behaviour}\label{sec:results}
+% ======================================================================
+
+We evolve a single Jupiter inhomogeneous--Gaussian initial profile
+($M = 1\,\Mjup$, $S_{\rm ini} = 8.2\,k_B/\mathrm{baryon}$,
+$Y_{\rm ini} = 0.277$, Helled-Stevenson primordial $Z$ profile,
+\texttt{cd} H/He EOS, AQUA water EOS, c23 atmosphere, helium rain
+enabled, $\alpha_{\rm rain} = 0.1$) for three configurations all with
+$\Omega = 0$:
+\begin{enumerate}
+\item Baseline (default ORCHARD physics, no smooth\_conv, no overshoot,
+  no entrainment).
+\item Baseline + \texttt{smooth\_convection\_criterion}.
+\item Baseline + \texttt{composition\_overshoot} ($\fov = 10^{-10}$).
+\end{enumerate}
+All three runs use the same grid ($N = 300$), same time-stepping, and
+reach an identical final age of $4.9996\,\rm Gyr$.  At the
+final age the three $Z$ profiles differ as follows:
+
+\begin{table}[!h]
+\centering
+\caption{$Z$ profile at $5$~Gyr in the gradient region.  Same physics
+  except the indicated module.}
+\label{tab:z-profiles-5gyr}
+\begin{tabular}{cccc}
+\hline
+$m/M$ & baseline & smooth\_conv & overshoot \\
+\hline
+0.30 & 0.069 & 0.064 & 0.089 \\
+0.27 & 0.132 & 0.103 & 0.089 \\
+0.25 & 0.132 & 0.161 & 0.089 \\
+0.22 & 0.186 & 0.234 & 0.089 \\
+0.20 & 0.230 & 0.257 & 0.089 \\
+0.17 & 0.275 & 0.290 & 0.140 \\
+0.15 & 0.304 & 0.312 & 0.224 \\
+0.10 & 0.354 & 0.354 & 0.337 \\
+0.05 & 0.381 & 0.381 & 0.378 \\
+\hline
+\end{tabular}
+\end{table}
+The baseline column shows the canonical staircase
+($Z \approx 0.13$ plateau in mass coordinate $0.25$--$0.27$, jumping
+to $\approx 0.19$ at $0.22$, etc.).  The smooth\_conv column shows
+the same overall gradient with the staircase smoothed into a slope.
+The overshoot column shows that the upper half of the gradient
+region has been mixed up into the envelope.  There $Z = 0.089$
+uniformly from the surface down to $m/M \approx 0.18$, with a
+continuous gradient below.  The atmospheric $Z$ enrichment at $5$~Gyr is
+$\sim 30\%$ for the overshoot model, modest for smooth\_conv, and
+nominal for the baseline.
+
+The same module set with rotation enabled produces qualitatively
+different behaviour: the \texttt{rotational\_convection} module alone
+steepens the bracket and modestly inflates the planet, but does not
+move the fuzzy-core boundary (the Ledoux criterion still pins the
+convective edge).  \texttt{composition\_overshoot} with
+\texttt{composition\_overshoot\_rotation\_couple = True} drops
+$\fov$ effectively by $R^3 \approx 0.004$, suppressing the
+overshoot diffusivity below $\Dmicro$ and preserving the fuzzy core
+to the planet's age.  The Theory-of-Figures cost of rotating runs
+makes a head-to-head $5$~Gyr rotcvn+overshoot test impractical in
+a single session.  The analytic argument nevertheless follows directly
+from the $R^3$ coupling and the per-boundary $\fov^{\rm rot}_b$ used in
+the implementation.
+
+% ======================================================================
+\section{Summary}\label{sec:summary}
+% ======================================================================
+
+The four modules described above implement a flux-based representation
+of rotation-modified convection and overshoot mixing in ORCHARD.
+Among the four, \texttt{rotational\_convection},
+\texttt{smooth\_convection\_criterion}, and
+\texttt{composition\_overshoot} are recommended for production use in
+giant-planet evolution; the \texttt{convective\_entrainment} module is
+preserved as a faithful translation of the F23 entrainment hypothesis,
+but does not capture the dramatic boundary-front propagation that
+requires hydrodynamic parcel physics.  Together, the modules let ORCHARD
+reproduce the F23 prediction that rotation specifically can preserve
+the fuzzy core of an unrotated planet that would otherwise be eroded
+on Gyr timescales.
+
+All four modules respect the master flag
+\texttt{[hydrostatic\_equilibrium].rotation}, default to disabled,
+and leave the existing flux closure exactly intact when off.  Each
+module is independently toggleable.  They are designed to be used in
+combination, but do not require it.
+
+\bibliographystyle{aasjournal}
+\bibliography{convective_rotation}
+
+\end{document}

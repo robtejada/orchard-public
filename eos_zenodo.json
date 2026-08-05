@@ -1,0 +1,8 @@
+{
+    "zenodo_record_id": "10659248",
+    "zenodo_doi": "10.5281/zenodo.10659248",
+    "note": "concept record id; setup_eos.py resolves it to the latest published EOS version at download time",
+    "filename": "eos.zip",
+    "version": "2.8.0",
+    "size_gb": 30.8
+}

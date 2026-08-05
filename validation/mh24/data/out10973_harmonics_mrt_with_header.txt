@@ -1,0 +1,23 @@
+Title: Study of Jupiter's Interior: Comparison of 2, 3, 4, 5, and 6 Layer Models
+Author: Burkhard Militzer and William B. Hubbard
+Table: Parameters of different interior models in Fig. 6
+================================================================================
+Byte-by-byte Description of file: out10973_harmonics_mrt_with_header.txt
+--------------------------------------------------------------------------------
+   Bytes Format Units   Label   Explanations
+--------------------------------------------------------------------------------
+   1-  2 D2     ---     n       Order of gravity harmonic J_n
+   4- 20 E15.8  ---     J_Int   Static contribution to J_n from interior 
+  22- 38 E15.8  ---     J_Wind  Dynamic contribution to J_n from winds
+  40- 56 E15.8  ---     J_Total Static and cynamic contributions combined
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+ 2  1.46964565e-02  4.98103923e-08  1.46965063e-02
+ 3  0.00000000e+00 -6.40948148e-08 -6.40948148e-08
+ 4 -5.86997902e-04  3.89372987e-07 -5.86608529e-04
+ 5  0.00000000e+00 -8.83748634e-08 -8.83748634e-08
+ 6  3.44258534e-05 -2.17641521e-07  3.42082119e-05
+ 7  0.00000000e+00  1.42921335e-07  1.42921335e-07
+ 8 -2.49280367e-06  7.08903998e-08 -2.42191327e-06
+ 9  0.00000000e+00 -1.12905291e-07 -1.12905291e-07
+10  2.06216578e-07 -2.38283020e-08  1.82388276e-07

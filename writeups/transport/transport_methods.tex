@@ -1,0 +1,1522 @@
+\documentclass{aastex631}
+
+\usepackage{amsmath,amssymb}
+\usepackage{natbib}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\pp}{\partial}
+\newcommand{\kbbar}{k_{\rm B}/\mathrm{amu}}
+\newcommand{\Hp}{H_P}
+\newcommand{\Hpress}{H_P}
+\newcommand{\Cp}{C_P}
+\newcommand{\Cv}{C_V}
+\newcommand{\Tint}{T_{\rm int}}
+\newcommand{\Teff}{T_{\rm eff}}
+\newcommand{\Tsurf}{T_{\rm surf}}
+\newcommand{\Tmelt}{T_{\rm melt}}
+\newcommand{\Ttrial}{T_{\rm trial}}
+\newcommand{\Yeq}{Y_{\rm misc}}
+\newcommand{\Zeq}{Z_{\rm misc}}
+\newcommand{\softplus}{\mathrm{softplus}}
+
+\shorttitle{ORCHARD Transport Methods}
+\shortauthors{Tejada Arevalo}
+
+\begin{document}
+
+\title{Thermal and Compositional Transport in the ORCHARD Planetary Evolution Code}
+
+\author{Roberto Tejada Arevalo}
+
+\begin{abstract}
+We describe the thermal and compositional transport methodology implemented
+in the ORCHARD planetary evolution code.  The solver simultaneously updates
+the specific entropy $S$, helium mass fraction $Y$, and heavy-element mass
+fraction $Z$ on a one-dimensional Lagrangian mass grid using a fully
+implicit, global Newton--Raphson scheme.  Heat transport includes
+mixing-length convection, radiative diffusion, conduction, semiconvection,
+and latent heat release.  Composition transport couples diffusion and
+advective sedimentation driven by hydrogen--helium and hydrogen--water
+immiscibility.  A smooth melt-fraction formalism bridges the inviscid
+liquid and high-viscosity solid regimes in the rocky mantle, yielding a
+self-consistent treatment of viscous convection from fully molten to fully
+solidified states.  The coupled $3N\times 3N$ system is solved with a
+trust-region--damped Newton iteration using sparse linear algebra.
+\end{abstract}
+
+\keywords{planets and satellites: interiors --- planets and satellites:
+physical evolution --- methods: numerical}
+
+% ======================================================================
+\section{Introduction}\label{sec:intro}
+% ======================================================================
+
+ORCHARD evolves planetary interiors by coupling hydrostatic structure
+equations with thermal and compositional transport.  The transport module
+takes as input the current mechanical state of the planet---temperature
+$T(m)$, pressure $P(m)$, density $\rho(m)$, and radii $r(m)$---and
+returns updated profiles of entropy $S$, helium fraction $Y$, and
+heavy-element fraction $Z$.  These profiles are then fed back to the
+hydrostatic solver for self-consistent iteration
+\citep{Henyey1964,Sur2024}.
+
+The planet is divided into three structural regions indexed by mass
+coordinate $m$:
+\begin{enumerate}
+  \item \textbf{Envelope} (cells $0$ to $k_{\rm core}-1$): hydrogen--helium
+    mixture with dissolved heavy elements.
+  \item \textbf{Rocky mantle} (cells $k_{\rm core}$ to $k_{\rm core,Fe}-1$):
+    silicate material (e.g.\ MgSiO$_3$).
+  \item \textbf{Iron core} (cells $k_{\rm core,Fe}$ to $N-1$): metallic iron.
+\end{enumerate}
+Special cases include coreless gas giants ($k_{\rm core}=N$) and bare-rock
+planets ($k_{\rm core}=0$).
+
+All quantities are defined on a cell-centered grid of $N$ mass shells.
+Fluxes are evaluated at the $N+1$ cell boundaries (subscript~$b$) or the
+$N-1$ interior boundaries (subscript~$i$).  Geometric and arithmetic means
+map cell-centered values to interfaces where needed.
+
+% ======================================================================
+\section{Governing Equations}\label{sec:governing}
+% ======================================================================
+
+\subsection{Entropy Evolution}\label{sec:entropy}
+
+The entropy of each mass shell evolves according to the first law of
+thermodynamics in Lagrangian form:
+\begin{equation}\label{eq:entropy_master}
+  \frac{\pp S}{\pp t}
+  = -\frac{1}{T}\frac{1}{\dd m}\left[
+      F_{\rm conv} + F_{\rm rad} + F_{\rm semi}
+    \right]
+  + \frac{L}{T}\frac{\pp\chi}{\pp t}
+  + \frac{Q_{\rm radio}}{T}
+  - \frac{1}{T}\left[
+      \frac{\pp U}{\pp Y}\bigg|_{S,\rho}\frac{\pp Y}{\pp t}
+    + \frac{\pp U}{\pp Z}\bigg|_{S,\rho}\frac{\pp Z}{\pp t}
+    \right],
+\end{equation}
+where $F_{\rm conv}$, $F_{\rm rad}$, and $F_{\rm semi}$ are the
+convective, radiative/conductive, and semiconvective heat fluxes
+(Section~\ref{sec:heat}); $L$ is the specific latent heat and $\chi$ the
+liquid melt fraction (Section~\ref{sec:latent}); $Q_{\rm radio}$ is the
+radiogenic heating rate (Section~\ref{sec:radiogenic}); and the final
+bracket captures the chemical-potential coupling when composition evolves
+simultaneously.
+
+\subsection{Helium Evolution}\label{sec:helium_gov}
+
+The helium mass fraction obeys an advection--diffusion equation:
+\begin{equation}\label{eq:Y_master}
+  \frac{\pp Y}{\pp t}
+  = \frac{1}{\dd m}\left[
+      4\pi r^2\rho\,D_Y\frac{\pp Y}{\pp r}
+    \right]
+  + \frac{1}{\dd m}\left[
+      4\pi r^2\rho\,v_{\rm rain}\,\mathcal{A}_Y
+    \right],
+\end{equation}
+where $D_Y$ is the effective helium diffusion coefficient
+(Section~\ref{sec:comp_diff}), $v_{\rm rain}=D_Y/(\Hp\,f_{\rm thres})$ is
+the sedimentation pseudo-velocity, and $\mathcal{A}_Y$ is a smooth
+activation product gating the advective flux to the immiscible region
+(Section~\ref{sec:helium_rain}).
+
+\subsection{Heavy-Element Evolution}\label{sec:Z_gov}
+
+The metallicity $Z$ evolves analogously to $Y$, but with two miscibility
+curves $Z_{1,{\rm misc}}$ and $Z_{2,{\rm misc}}$ bounding the immiscible
+region:
+\begin{equation}\label{eq:Z_master}
+  \frac{\pp Z}{\pp t}
+  = \frac{1}{\dd m}\left[
+      4\pi r^2\rho\,D_Z\frac{\pp Z}{\pp r}
+    \right]
+  + \frac{1}{\dd m}\left[
+      4\pi r^2\rho\,v_{{\rm rain},Z}\,\mathcal{A}_Z
+    \right].
+\end{equation}
+Metal rain (Section~\ref{sec:metal_rain}) follows either the
+\citet{Rogers2025} rock-rain or \citet{Gupta2024} water-rain miscibility
+formalism.
+
+% ======================================================================
+\section{Heat Transport}\label{sec:heat}
+% ======================================================================
+
+\subsection{Convective Flux (Mixing-Length Theory)}\label{sec:mlt}
+
+In convectively unstable regions the heat flux follows
+mixing-length theory (MLT):
+\begin{equation}\label{eq:Fconv}
+  F_{\rm conv}
+  = -\varphi\left|\frac{\dd S_{\rm eff}}{\dd r}\right|^{n_{\rm conv}},
+\end{equation}
+where the effective entropy gradient includes the Ledoux composition
+terms:
+\begin{equation}\label{eq:bracket}
+  \frac{\dd S_{\rm eff}}{\dd r}
+  \equiv -\frac{\dd S}{\dd r}
+  + \frac{\pp S}{\pp Y}\bigg|_{\rho,P}\frac{\dd Y}{\dd r}
+  + \frac{\pp S}{\pp Z}\bigg|_{\rho,P}\frac{\dd Z}{\dd r}.
+\end{equation}
+A soft-hinge function clamps this bracket to non-negative values before
+raising it to the power $n_{\rm conv}$.  Two smoothing options are
+available: a ``classic'' cubic hinge $f(x) = x^3/(a^2+x^2)$, or a
+softplus function $f(x)=\ln(1+e^{\beta x})/\beta$.
+
+The transport prefactor $\varphi$ for the \textbf{envelope} is
+\begin{equation}\label{eq:phi_env}
+  \varphi_{\rm env}
+  = \sqrt{\delta}\;4\pi r^2\,\rho\,T\,
+    \sqrt{\frac{g\,\alpha_{\rm mlt}^4}{32\,\Cp}},
+\end{equation}
+where $\delta=-(\pp\ln\rho/\pp\ln T)_P$ is the thermal expansion
+parameter from the equation of state, $g=Gm/r^2$ is the local
+gravitational acceleration, $\alpha_{\rm mlt}$ is the mixing-length
+parameter (denoted $\Hp$ in the code, with units of cm), and $\Cp$ is the
+specific heat at constant pressure.  The convective exponent in the
+envelope is $n_{\rm conv}=3/2$.
+
+\subsection{Radiative and Conductive Flux}\label{sec:rad}
+
+The diffusive (radiative plus conductive) heat flux is
+\begin{equation}\label{eq:Frad}
+  F_{\rm rad} = -\Lambda\,\frac{\dd T}{\dd r},
+\end{equation}
+where $\Lambda = \Lambda_{\rm cond} + \Lambda_{\rm rad}$ is the total
+thermal diffusion coefficient.
+
+\paragraph{Radiative opacity.}
+In the envelope, the radiative contribution is
+\begin{equation}\label{eq:Lambda_rad}
+  \Lambda_{\rm rad}
+  = \frac{4aT^3}{3\kappa_R\rho}\,\Theta(t),
+  \qquad
+  \Theta(t) = \frac{2}{\pi}\arctan\!\left(\frac{t}{t_{\rm rad}}\right),
+\end{equation}
+where $\kappa_R(\rho,T,Z)$ is the Rosseland mean opacity interpolated from
+pre-tabulated grids at metallicities $[5,10,30,50,100]\times Z_\odot$, $a$
+is the radiation density constant, and $\Theta(t)$ is a temporal ramp
+(with $t_{\rm rad}=0.5$~Gyr) that prevents radiative transport from
+dominating at very early times.
+
+\paragraph{Envelope conduction.}
+The conductive contribution in the envelope uses the \citet{French2019}
+water conductivity as a proxy for the heavy-element component:
+\begin{equation}\label{eq:Lambda_cond_env}
+  \Lambda_{\rm cond}
+  = \lambda_{\rm fac}\left[
+      (1-Z)\,\Lambda_{\rm H/He}(P)
+    + Z\,\Lambda_{\rm H_2O}(\rho,T)
+    \right],
+\end{equation}
+where $\Lambda_{\rm H/He}(P)$ is an anchored baseline derived from
+\citet{French2019} and \citet{Becker2018} adiabatic conductivity tables,
+corrected for the heavy-element content at the reference adiabat:
+\begin{equation}
+  \Lambda_{\rm H/He}
+  = \frac{\Lambda_{\rm ref}(P) - Z_{\rm ref}(P)\,\Lambda_{\rm H_2O}}
+         {\max(1 - Z_{\rm ref},\,\epsilon)}.
+\end{equation}
+The factor $\lambda_{\rm fac}$ is a user-configurable scaling.
+
+\paragraph{Mantle conduction.}
+In the rocky mantle the thermal conductivity combines lattice and
+electronic contributions:
+\begin{equation}\label{eq:k_mantle}
+  k_{\rm mantle} = k_{\rm lat} + k_{\rm elec}.
+\end{equation}
+The lattice component follows \citet{PengDeng2025} (or
+\citealt{DengStixrude2021}):
+\begin{equation}\label{eq:k_lat}
+  k_{\rm lat}
+  = k_0\left(\frac{V_0}{V}\right)^g\left(\frac{T_0}{T}\right)^a,
+\end{equation}
+with reference molar volume $V_0$, conductivity $k_0$, and exponents $g$
+and $a$.
+
+The electronic component uses the Wiedemann--Franz law:
+\begin{equation}\label{eq:k_elec}
+  k_{\rm elec} = \mathcal{L}\,\sigma(P,T)\,T,
+\end{equation}
+where $\mathcal{L}=2.7\times10^{-8}$~W\,$\Omega$\,K$^{-2}$ is the Lorenz
+number and $\sigma$ is the electrical conductivity from
+\citet{Holmstrom2018}:
+\begin{equation}\label{eq:sigma}
+  \sigma = \sigma_0\exp\!\left[
+    -\frac{\Delta E + P\Delta V}{RT}
+  \right],
+\end{equation}
+with $\sigma_0=1.99\times10^5$~S\,m$^{-1}$,
+$\Delta E=75.94$~kJ\,mol$^{-1}$, and
+$\Delta V=-0.061$~cm$^3$\,mol$^{-1}$.
+
+\paragraph{Iron core.}
+The iron core uses a constant thermal conductivity (user-specified,
+typically 40--100~W\,m$^{-1}$\,K$^{-1}$).
+
+\subsection{Semiconvective Flux}\label{sec:semi}
+
+Semiconvection operates in regions that are Schwarzschild-unstable but
+Ledoux-stable.  The double-diffusive criterion is parameterized by the
+inverse density ratio:
+\begin{equation}\label{eq:R0inv}
+  R_0^{-1}
+  = \frac{\nabla_S - \nabla_L}{\nabla_S},
+\end{equation}
+where $\nabla_S$ and $\nabla_L$ are the Schwarzschild and Ledoux entropy
+gradients, respectively.  Semiconvection is active where
+$1 < R_0^{-1} < R_{\rm crit}^{-1}$, with
+\begin{equation}
+  R_{\rm crit}^{-1} = \frac{\Pr + 1}{\Pr + \tau},
+\end{equation}
+where $\Pr$ is the turbulent Prandtl number and $\tau$ the
+diffusivity ratio.
+
+\subsubsection{Continuous Model}
+
+The default (continuous) semiconvection model maps the double-diffusive
+window onto a stability parameter:
+\begin{equation}
+  \chi_{\rm sc}
+  = \frac{R_0^{-1} - 1}{R_{\rm crit}^{-1} - 1},
+  \qquad 0\le\chi_{\rm sc}\le 1,
+\end{equation}
+and defines a smooth ramp
+\begin{equation}
+  f_{\rm sc} = (1 - \chi_{\rm sc})^{n_{\rm smooth}},
+\end{equation}
+which modulates the thermal Nusselt number:
+\begin{equation}
+  \mathrm{Nu}_T = 1 + (\mathrm{Nu}_{T,\max} - 1)\,f_{\rm sc}.
+\end{equation}
+The semiconvective heat flux is then
+\begin{equation}\label{eq:Fsemi}
+  F_{\rm semi}
+  = -4\pi r^2\,\Lambda\,\frac{(\mathrm{Nu}_T - 1)\,T}{\Cp}
+    \,\nabla_S,
+\end{equation}
+and the compositional diffusivity is enhanced by a matching Nusselt
+number $\mathrm{Nu}_X$:
+\begin{equation}
+  D_{\rm semi} = D_{\rm micro}\,\mathrm{Nu}_X.
+\end{equation}
+Both $\mathrm{Nu}_T$ and $\mathrm{Nu}_X$ are time-lagged via exponential
+relaxation to avoid Newton-iteration flicker:
+\begin{equation}
+  \mathrm{Nu}(t+\Delta t)
+  = \mathrm{Nu}_{\rm old}
+  + \theta_\nu\,(\mathrm{Nu}_{\rm tgt} - \mathrm{Nu}_{\rm old}),
+  \quad
+  \theta_\nu = 1 - e^{-\Delta t/\tau_D}.
+\end{equation}
+
+\subsubsection{Bulk (Semi-Shoot) Model}
+
+An alternative ``semi-shoot'' model applies binary semiconvection in
+zones satisfying the $R_0^{-1}$ criterion and extends it with an
+exponential overshoot taper around the envelope--mantle boundary:
+\begin{equation}
+  w_{\rm ov}(r)
+  = \exp\!\left(-\frac{|r - r_{\rm EMB}|}{f_{\Hp}\,\Hp}\right),
+\end{equation}
+where $r_{\rm EMB}$ is the radius of the envelope--mantle interface and
+$f_{\Hp}$ controls the overshoot scale in units of the local pressure
+scale height.
+
+% ======================================================================
+\section{Viscous Mantle Convection}\label{sec:viscous}
+% ======================================================================
+
+The rocky mantle transitions from fully liquid (low viscosity,
+$\eta_{\rm liq}\sim100$~Pa\,s) to fully solid (high viscosity,
+$\eta_{\rm solid}(P,T)$ from dislocation creep) as it cools.  ORCHARD
+models this transition using a smooth melt-fraction parameter $\chi$
+(Section~\ref{sec:latent}) that blends between two convective regimes.
+
+\subsection{Solid-State Viscosity}
+
+The dynamic viscosity of solid silicate follows a dislocation-creep law
+\citep{Ranalli2001}:
+\begin{equation}\label{eq:eta_solid}
+  \eta_{\rm solid}
+  = \frac{1}{2}\,B^{-1/n}\,\dot\varepsilon^{(1-n)/n}
+    \exp\!\left(\frac{E^* + PV^*}{nRT}\right),
+\end{equation}
+where $B$, $n$, $E^*$, and $V^*$ are material-dependent parameters
+(perovskite values: $B=7.4\times10^{-17}$, $n=3.5$,
+$E^*=5.0\times10^5$~J\,mol$^{-1}$, $V^*=10^{-5}$~m$^3$\,mol$^{-1}$)
+and $\dot\varepsilon=10^{-15}$~s$^{-1}$ is the assumed strain rate.
+
+The effective kinematic viscosity at each boundary is blended in
+log-space:
+\begin{equation}\label{eq:nu_blend}
+  \log_{10}\nu_{\rm eff}
+  = \chi\,\log_{10}\nu_{\rm liq}
+  + (1-\chi)\,\log_{10}\nu_{\rm solid},
+\end{equation}
+where $\nu = \eta/\rho$.
+
+\subsection{Eddy Diffusivity Branches}
+
+Four eddy-diffusivity branches capture the physics:
+
+\paragraph{Inviscid, thermal (Eq.~34a):}
+\begin{equation}\label{eq:kappa34a}
+  \kappa_{34a}
+  = \sqrt{\frac{\alpha\,T\,g\,\Hp^4}{32\,\Cp}}.
+\end{equation}
+
+\paragraph{Viscosity-limited, thermal (Eq.~34b):}
+\begin{equation}\label{eq:kappa34b}
+  \kappa_{34b}
+  = \frac{\alpha\,T\,g\,\Hp^4}{32\,\Cp\,\nu_{\rm eff}}.
+\end{equation}
+
+\paragraph{Inviscid, melt-curve (Eq.~35a):}
+\begin{equation}\label{eq:kappa35a}
+  \kappa_{35a}
+  = \sqrt{\frac{\alpha_\chi\,\Tmelt\,g\,\Hp^4}{32\,L}},
+\end{equation}
+where $\alpha_\chi = |(\pp\rho/\pp\chi)_{P,T}|/\rho$ is the
+melt-contraction parameter and $L$ is the specific latent heat.
+
+\paragraph{Viscosity-limited, melt-curve (Eq.~35b):}
+\begin{equation}\label{eq:kappa35b}
+  \kappa_{35b}
+  = \frac{\alpha_\chi\,\Tmelt\,g\,\Hp^4}{32\,L\,\nu_{\rm eff}}.
+\end{equation}
+
+\subsection{Log-Space Blending}
+
+The effective eddy diffusivity interpolates between the inviscid and
+viscous branches using the melt fraction as a weight.  First, the
+composite inviscid and viscous diffusivities are formed:
+\begin{align}
+  \kappa_{\rm inv}
+  &= \chi\,\kappa_{34a} + (1-\chi)\,\kappa_{35a},
+  \label{eq:kappa_inv}\\
+  \kappa_{\rm vis}
+  &= (1-\chi)\,\kappa_{34b} + \chi\,\kappa_{35b}.
+  \label{eq:kappa_vis}
+\end{align}
+The dynamic range of the ratio
+$\log_{10}(\kappa_{\rm inv}/\kappa_{\rm vis})$ is capped at
+$\Delta_{\max}=6$ to prevent catastrophic sensitivity near the melt front.
+The final diffusivity is
+\begin{equation}\label{eq:kappa_eff}
+  \log_{10}\kappa_{\rm eff}
+  = \chi\,\log_{10}\kappa_{\rm inv}
+  + (1-\chi)\,\log_{10}\kappa_{\rm vis}.
+\end{equation}
+
+The mantle transport prefactor is then
+\begin{equation}\label{eq:phi_mantle}
+  \varphi_{\rm mantle}
+  = 4\pi r^2\,\rho\,T\,\kappa_{\rm eff},
+\end{equation}
+and the convective exponent smoothly transitions with melt fraction:
+\begin{equation}\label{eq:nconv_mantle}
+  n_{\rm conv}(\chi)
+  = \tfrac{3}{2} + \tfrac{1}{2}(1-\chi),
+\end{equation}
+i.e.\ $n=3/2$ when fully liquid and $n=2$ when fully solid.
+
+% ======================================================================
+\section{Latent Heat}\label{sec:latent}
+% ======================================================================
+
+\subsection{Melt Fraction}
+
+The liquid melt fraction $\chi(T,P)$ is modeled as a smooth step:
+\begin{equation}\label{eq:chi}
+  \chi(T,P)
+  = \frac{1}{2}\left[1 + \tanh\!\left(
+      \frac{T - \Tmelt(P)}{\Delta T_{\rm lat}}
+    \right)\right],
+\end{equation}
+where $\Tmelt(P)$ is the pressure-dependent melting curve (from the
+mantle or core equation of state) and $\Delta T_{\rm lat}$ controls the
+width of the transition (default 300~K).  Its derivative is
+\begin{equation}\label{eq:dchidT}
+  \frac{\pp\chi}{\pp T}
+  = \frac{1}{2\,\Delta T_{\rm lat}}
+    \,\mathrm{sech}^2\!\left(
+      \frac{T - \Tmelt}{\Delta T_{\rm lat}}
+    \right).
+\end{equation}
+
+\subsection{Relaxation}\label{sec:chi_relax}
+
+The equilibrium melt fraction $\chi_{\rm tgt}(T,P)$ from
+Equation~(\ref{eq:chi}) can change abruptly between timesteps when the
+temperature crosses the melting curve, particularly in narrow transition
+zones where $\Delta T_{\rm lat}$ is small relative to the temperature
+change per step.  To prevent such discontinuous jumps from
+destabilizing the Newton solver, a first-order relaxation filter is
+applied:
+\begin{equation}\label{eq:chi_relax}
+  \chi^{n+1}
+  = \chi^n + \theta_\chi\,\bigl(\chi_{\rm tgt}(T_{\rm trial}) - \chi^n\bigr),
+\end{equation}
+where $\chi^n$ is the melt fraction accepted at the previous timestep,
+$\chi_{\rm tgt}(T_{\rm trial})$ is the equilibrium target evaluated at
+the \emph{trial temperature} (Section~\ref{sec:trial_temp}) of the
+current Newton iterate, and
+\begin{equation}\label{eq:theta_chi}
+  \theta_\chi = 1 - e^{-\Delta t/\tau_\chi}
+\end{equation}
+is a dimensionless blending weight controlled by the user-specified
+relaxation timescale $\tau_\chi$.
+
+The behavior of the filter depends on the ratio $\Delta t/\tau_\chi$:
+\begin{itemize}
+  \item \textbf{Small timestep} ($\Delta t \ll \tau_\chi$):
+    $\theta_\chi \approx \Delta t/\tau_\chi$, so $\chi$ evolves at a
+    rate limited by $\tau_\chi$ regardless of how large the
+    equilibrium jump is:
+    \begin{equation}\label{eq:dchidt_limit}
+      \frac{\Delta\chi}{\Delta t}
+      \approx \frac{\chi_{\rm tgt} - \chi^n}{\tau_\chi}\,.
+    \end{equation}
+  \item \textbf{Large timestep} ($\Delta t \gg \tau_\chi$):
+    $\theta_\chi \to 1$, and $\chi^{n+1} \to \chi_{\rm tgt}$---the
+    full equilibrium value is recovered.
+  \item \textbf{No relaxation} ($\tau_\chi = 0$):
+    $\theta_\chi = 1$ identically, and
+    $\chi^{n+1} = \chi_{\rm tgt}(T_{\rm trial})$.
+\end{itemize}
+
+Two separate relaxation timescales are maintained: one for the
+latent-heat source term (which directly enters the entropy residual)
+and one for the transport-geometry updates (which control the
+viscous/inviscid blending in mantle convection,
+Section~\ref{sec:mantle}).  This allows the viscous transition to
+track the equilibrium melt state more or less tightly than the
+latent-heat release.
+
+\subsection{Nature of $\Delta\chi$}\label{sec:dchi_nature}
+
+The term $\pp\chi/\pp t$ in the continuous entropy equation
+(Equation~\ref{eq:entropy_master}) is discretized as a finite
+difference $\Delta\chi / \Delta t$, but it is \emph{not} a simple
+forward-Euler difference of the equilibrium melt fraction.  Instead,
+$\Delta\chi$ is the change in the \textbf{relaxation-filtered} melt
+fraction evaluated at the \textbf{trial temperature}:
+\begin{equation}\label{eq:dchi_def}
+  \Delta\chi_k
+  \;\equiv\; \chi_k^{n+1} - \chi_k^n
+  \;=\; \theta_\chi \bigl(\chi_{\rm tgt}(T_{{\rm trial},k}) - \chi_k^n\bigr).
+\end{equation}
+Two features make this implicit:
+\begin{enumerate}
+  \item \textbf{Trial-temperature dependence.}  The target
+    $\chi_{\rm tgt}$ is evaluated at $T_{\rm trial}$, which is a
+    linearized function of the Newton unknowns $(S', Y, Z)$ via
+    \begin{equation}
+      T'_{\rm trial} = T' + \frac{T'}{\Cv}\,S_0\,(S' - S'_{\rm old})
+        + \frac{\pp T'}{\pp Y}\,(Y - Y_{\rm old})
+        + \frac{\pp T'}{\pp Z}\,(Z - Z_{\rm old}).
+    \end{equation}
+    Therefore $\Delta\chi$ changes as the Newton solver updates $S$,
+    $Y$, and $Z$, and the Jacobian captures this coupling.
+  \item \textbf{Relaxation damping.}  The prefactor $\theta_\chi$
+    limits how much $\chi$ can change per timestep, preventing the
+    latent heat from releasing or absorbing energy faster than the
+    relaxation timescale permits.
+\end{enumerate}
+
+\subsection{Residual Contribution}\label{sec:lat_residual}
+
+The latent heat enters the entropy residual
+(Equation~\ref{eq:BS}) as
+\begin{equation}\label{eq:Rlat}
+  \mathcal{R}_{{\rm lat},k}
+  = \frac{L_k}{T_0\,S_0}\,\frac{\Delta\chi_k}{T'_k}\,,
+\end{equation}
+where $L_k$ is the specific latent heat of the relevant layer
+(mantle or iron core), $T'_k = T_k/T_0$ is the dimensionless
+temperature, and $\Delta\chi_k$ is given by
+Equation~(\ref{eq:dchi_def}).  When $\Delta\chi > 0$ (melting), the
+residual drives the entropy \emph{downward} (the material absorbs
+latent heat from its thermal energy); when $\Delta\chi < 0$
+(freezing), entropy is released.
+
+\subsection{Jacobian Contributions}\label{sec:lat_jacobian}
+
+Because $\Delta\chi_k$ depends on $T_{\rm trial}$, and therefore on
+the Newton unknowns, the Jacobian of the latent residual is nonzero.
+Define the common chain-rule factor
+\begin{equation}\label{eq:common_lat}
+  C_k
+  = \frac{\pp\chi_{\rm tgt}}{\pp T}\bigg|_k
+    \!\cdot\,\frac{T_0}{T'_k}
+  \;-\; \frac{\Delta\chi_k}{(T'_k)^2}\,,
+\end{equation}
+where the first term differentiates the numerator $\Delta\chi$ with
+respect to $T$ (via the tanh derivative,
+Equation~\ref{eq:dchidT}, multiplied by~$\theta_\chi$), and the
+second term differentiates the $1/T'$ denominator.
+The diagonal Jacobian contributions in the entropy row are then
+\begin{align}
+  J_{{\rm lat},S,k}
+    &= \frac{L_k}{T_0\,S_0}
+       \,\frac{\pp T'}{\pp S'}\bigg|_k \! C_k\,,
+    &\frac{\pp T'}{\pp S'}
+    &= \frac{T'}{\Cv}\,S_0\,,
+  \label{eq:JlatS}\\[4pt]
+  J_{{\rm lat},Y,k}
+    &= \frac{L_k}{T_0\,S_0}
+       \,\frac{\pp T'}{\pp Y}\bigg|_k \! C_k\,,
+  \label{eq:JlatY}\\[4pt]
+  J_{{\rm lat},Z,k}
+    &= \frac{L_k}{T_0\,S_0}
+       \,\frac{\pp T'}{\pp Z}\bigg|_k \! C_k\,.
+  \label{eq:JlatZ}
+\end{align}
+These are added to the diagonal entries of the Jacobian:
+$J_{{\rm lat},S}$ enters $J_{3k,3k}$,
+$J_{{\rm lat},Y}$ enters $J_{3k,3k+1}$, and
+$J_{{\rm lat},Z}$ enters $J_{3k,3k+2}$.
+No off-diagonal (neighbor-cell) Jacobian entries arise because $\chi$
+depends only on the local cell temperature and pressure.
+
+The key point is that the $\pp\chi/\pp T$ derivative appearing in
+Equations~(\ref{eq:JlatS})--(\ref{eq:JlatZ}) is the derivative of
+the \emph{relaxed} melt fraction, not the raw equilibrium value:
+\begin{equation}\label{eq:dchidT_relaxed}
+  \frac{\pp\chi^{n+1}}{\pp T}
+  = \theta_\chi\,\frac{\pp\chi_{\rm tgt}}{\pp T}\,.
+\end{equation}
+When $\theta_\chi < 1$, the effective sensitivity is reduced, keeping
+the Jacobian consistent with the damped residual and preventing the
+Newton solver from overcorrecting near the melt front.
+
+\subsection{Latent-Heat Parameters}
+
+The mantle latent heat is $L_{\rm mantle}=3.3\times10^9\,f_L$~erg\,g$^{-1}$
+(where $f_L$ is a user-configurable scale factor), and the core value is
+provided by the iron equation of state.
+
+% ======================================================================
+\section{Radiogenic Heating}\label{sec:radiogenic}
+% ======================================================================
+
+Radioactive decay in the rocky mantle contributes a volumetric heat
+source to the entropy equation.  The per-cell radiogenic power is
+\begin{equation}\label{eq:Qradio}
+  Q_{{\rm radio},k}(t) = H_{\rm spec}(t)\,\delta m_k,
+\end{equation}
+where $\delta m_k$ is the cell mass and $H_{\rm spec}(t)$
+(erg\,s$^{-1}$\,g$^{-1}$) is the time-dependent specific heating
+rate.  Radiogenic heating is applied only to mantle cells
+($k_{\rm core}\le k < k_{\rm core,Fe}$); envelope and iron-core cells
+receive no radiogenic contribution.
+
+\subsection{Isotope Decay Chains}
+
+The specific heating rate is the sum of contributions from four
+long-lived isotopes:
+\begin{equation}\label{eq:Hspec}
+  H_{\rm spec}(t)
+  = \sum_{i\in\mathcal{I}} w_i\,q_{0,i}\;
+    2^{(t_{\rm now} - t)/\tau_i},
+\end{equation}
+where $\mathcal{I}=\{{}^{40}\mathrm{K},\;{}^{232}\mathrm{Th},\;
+{}^{235}\mathrm{U},\;{}^{238}\mathrm{U}\}$, $q_{0,i}$ are
+present-day Earth heat-production rates per unit mass from
+\citet{McDonough1995}, $\tau_i$ are the respective half-lives, and
+$t_{\rm now}=4.567$\,Gyr is the present Solar System age.  The
+optional weight factors $w_i$ (default unity) allow the user to scale
+the radiogenic inventory relative to Earth.  Because the exponential
+runs backwards from today, the heating rate at early times is
+significantly larger: the short-lived isotopes $^{235}$U
+($\tau=0.704$\,Gyr) and $^{40}$K ($\tau=1.25$\,Gyr) dominate during
+the first few billion years.  Table~\ref{tab:isotopes} lists the
+adopted constants.
+
+\begin{deluxetable}{lcc}
+\tablecaption{Parameters of Radiogenic Elements \citep{McDonough1995}.\label{tab:isotopes}}
+\tablecolumns{3}
+\tablehead{
+  \colhead{Element} &
+  \colhead{$q_0$ (W\,kg$^{-1}$)} &
+  \colhead{$\tau$ (Gyr)}
+}
+\startdata
+$^{40}$K    & $8.69\times10^{-13}$ & 1.25  \\
+$^{232}$Th  & $2.24\times10^{-12}$ & 14    \\
+$^{235}$U   & $8.48\times10^{-14}$ & 0.704 \\
+$^{238}$U   & $1.97\times10^{-12}$ & 4.47  \\
+\enddata
+\end{deluxetable}
+
+\subsection{Entry into the Entropy Residual}
+
+The radiogenic term enters the entropy residual
+(Equation~\ref{eq:BS}) as
+\begin{equation}\label{eq:Bsrad}
+  B_{3k} \mathrel{-}= \frac{\Delta t}{\dd m'_k\,T'_k}\,Q'_k,
+\end{equation}
+where $Q'_k = Q_{{\rm radio},k}/(M_0\,T_0\,S_0)$ is the
+non-dimensionalized per-cell power.  The minus sign ensures that
+positive heating drives entropy upward under the Newton update
+$\mathbf{z}_{\rm new}=\mathbf{z}_{\rm old}-\mathbf{J}^{-1}\mathbf{B}$.
+
+\subsection{Jacobian Contribution}
+
+Although $H_{\rm spec}$ depends only on time (not on the solution
+variables $S$, $Y$, $Z$), the residual term
+$-\Delta t\,Q'_k/(\dd m'_k\,T'_k)$ depends implicitly on entropy
+through the $1/T'_k$ factor.  Differentiating with respect to $S'_k$
+gives
+\begin{equation}\label{eq:Jrad}
+  \frac{\pp}{\pp S'_k}\!\left[
+    -\frac{\Delta t}{\dd m'_k}\,\frac{Q'_k}{T'_k}
+  \right]
+  = \frac{\Delta t}{\dd m'_k}\,
+    \frac{Q'_k}{(T'_k)^{2}}\,
+    \frac{\pp T'}{\pp S'}\bigg|_k,
+\end{equation}
+where the EOS chain rule provides
+\begin{equation}\label{eq:dTdS_radio}
+  \frac{\pp T'}{\pp S'}\bigg|_k
+  = \frac{T'_k}{\Cv[,k]}\,S_0.
+\end{equation}
+This is added to the diagonal Jacobian entry $J_{3k,\,3k}$.
+The contribution is positive, reflecting the stabilizing feedback
+that a hotter cell (higher~$S$) reduces the $Q/T$ source and thereby
+slows further entropy production.  No off-diagonal Jacobian entries
+arise from the radiogenic term because $H_{\rm spec}$ is independent
+of composition.
+
+% ======================================================================
+\section{Composition Transport}\label{sec:comp}
+% ======================================================================
+
+\subsection{Diffusion Coefficients}\label{sec:comp_diff}
+
+The effective diffusion coefficient for helium is the sum of a
+microscopic and a convective (MLT) contribution:
+\begin{equation}\label{eq:DY}
+  D_Y = D_{\rm micro,Y} + D_{\rm MLT},
+\end{equation}
+where the MLT diffusivity is
+\begin{equation}\label{eq:DMLT}
+  D_{\rm MLT}
+  = \frac{v_{\rm MLT}\,\Hpress}{3},
+  \qquad
+  v_{\rm MLT}
+  = \sqrt{\frac{g\,\Hp^2}{8\,\Cp}\,\frac{\dd S_{\rm eff}}{\dd r}}.
+\end{equation}
+The metal diffusion coefficient $D_Z$ has the same structure but with
+separate microscopic values $D_{\rm micro,Z}$.  An elevated interior
+value $D_{\rm micro,Z,in}$ is used for enclosed mass fractions
+$m/M < f_{\rm inner}$ (default 0.7) to prevent unrealistic deep
+stratification.
+
+\subsubsection{Smooth Ledoux Transition}
+
+In zones that are Schwarzschild-unstable but Ledoux-stable, the
+composition diffusivity is smoothly ramped down rather than cut off:
+\begin{equation}
+  D_{\rm trans}
+  = D_{\rm Schwarz}\,(1 - \chi_{\rm stab})^{n_{\rm smooth}},
+\end{equation}
+where $\chi_{\rm stab}=|\nabla_L|/(\nabla_S - \nabla_L)$ measures
+the Ledoux stabilization strength and $D_{\rm Schwarz}$ is the
+Schwarzschild-only MLT diffusivity.
+
+\subsubsection{Time Relaxation}
+
+To prevent large timestep-to-timestep jumps, $D_Y$ and $D_Z$ are relaxed
+using a closed-form M\"obius update:
+\begin{equation}\label{eq:D_relax}
+  w = \frac{D - D_A}{D - D_B},
+  \qquad
+  w(t+\Delta t) = w(t)\,e^{-\Delta t/(\tau_D\,|D_A D_B|)},
+  \qquad
+  D = \frac{D_B\,w - D_A}{w - 1},
+\end{equation}
+where $D_A$ and $D_B$ are the instantaneous and microscopic targets, and
+$\tau_D$ is the diffusion relaxation timescale.  A stable exponential
+blend serves as a numerical fallback when the M\"obius transform becomes
+ill-conditioned.
+
+\subsection{Helium Rain}\label{sec:helium_rain}
+
+Helium sedimentation is driven by the hydrogen--helium miscibility curve
+$\Yeq(P,T)$, evaluated from \citet{Lorenzen2011} or
+\citet{Schoettler2018} tables.
+
+\subsubsection{Activation Product}
+
+The advective helium-rain flux is gated by a smooth activation product
+that is nonzero only in the immiscible region:
+\begin{equation}\label{eq:Yflux_new}
+  \mathcal{A}_Y
+  = \softplus_\beta\!\bigl(Y - \Yeq(1-Z) - \delta_{\rm imp}\bigr)
+  \;\cdot\;
+  \softplus_\beta\!\bigl(Y_{\rm thres} - Y\bigr),
+\end{equation}
+where $\softplus_\beta(x) = \ln(1+e^{\beta x})/\beta$ is a smooth ReLU
+approximation, $Y_{\rm thres}$ is an inner threshold preventing
+sedimentation past the core, and $\delta_{\rm imp}$ captures the implicit
+temperature dependence of the miscibility curve:
+\begin{equation}
+  \delta_{\rm imp}
+  = \left(\frac{\pp\Yeq}{\pp T}
+  + \frac{\pp\Yeq}{\pp P}\frac{\pp P}{\pp T}\right)
+  \frac{T}{\Cp}\,(S - S_{\rm old})\,S_0\,(1-Z).
+\end{equation}
+
+The sign of the rain flux uses a smooth-sign surrogate:
+\begin{equation}
+  \widetilde{\mathrm{sgn}}(x)
+  = \frac{x}{\sqrt{x^2 + \epsilon^2}},
+\end{equation}
+with $\epsilon\sim10^{-12}$.
+
+\subsubsection{Discretized Flux Coefficients}\label{sec:disc_comp_flux}
+
+At each interior boundary $i$ (lying between cells $k$ and $k+1$), the
+composition fluxes are constructed from a diffusive and an advective
+coefficient.  Let $r_i$, $\rho_i$ denote the geometric-mean radius and
+density at boundary~$i$, and $\Delta r_i = r_{k+1} - r_k$ the radial
+cell spacing.  The common geometric prefactor is
+$\mathcal{G}_i = 4\pi r_i^2\,\rho_i$.
+
+The \textbf{diffusive} flux coefficient for helium is
+\begin{equation}\label{eq:sigma1}
+  \sigma_{1,i} = \frac{\mathcal{G}_i\,D_{Y,i}}{\Delta r_i},
+\end{equation}
+where $D_{Y,i}$ is the helium diffusion coefficient interpolated to
+boundary~$i$.  The \textbf{advective} (sedimentation) flux coefficient is
+\begin{equation}\label{eq:sigma2}
+  \sigma_{2,i}
+  = \frac{\mathcal{G}_i\,D_{2,i}}{\Hp\,f_{\rm thres}},
+\end{equation}
+where $D_{2,i}$ is the advective diffusion coefficient (equal to the
+MLT diffusivity in the rain zone) and $f_{\rm thres}$ is a
+miscibility-threshold parameter controlling the rain velocity.
+
+The total helium flux at boundary~$i$ is therefore
+\begin{equation}\label{eq:Yflux_total}
+  \mathcal{F}_{Y,i}
+  = \sigma_{1,i}\,(Y_{k+1}-Y_k)
+  + \sigma_{2,i}\,\widetilde{\mathrm{sgn}}(\mathcal{A}_Y)\,\mathcal{A}_{Y,i}.
+\end{equation}
+Analogous expressions hold for the metal fluxes with
+$D_{Z,i}$, $D_{2Z,i}$, and scale height $H_Z$ replacing $\Hp\,f_{\rm thres}$.
+
+\subsubsection{Activation-Product Derivatives}\label{sec:activ_deriv}
+
+The Newton solver requires the Jacobian of the activation product
+$\mathcal{A}_Y$ (Equation~\ref{eq:Yflux_new}) with respect to the state
+variables $S'$, $Y$, and $Z$.  Define the shorthand
+\begin{equation}
+  \mathcal{P}_1 \equiv \softplus_\beta(\mathrm{arg}_1),
+  \qquad
+  \mathcal{P}_2 \equiv \softplus_\beta(\mathrm{arg}_2),
+\end{equation}
+where $\mathrm{arg}_1 = Y - \Yeq(1-Z) - \delta_{\rm imp}$ and
+$\mathrm{arg}_2 = Y_{\rm thres} - Y$.  The derivative of the softplus
+is the sigmoid function:
+\begin{equation}
+  \sigma_\beta(x)
+  \equiv \frac{\dd}{\dd x}\softplus_\beta(x)
+  = \frac{1}{1 + e^{-\beta x}}.
+\end{equation}
+
+By the product rule, the $Y$-derivative of the activation product at
+boundary~$i$ is
+\begin{equation}\label{eq:dAY_dY}
+  \frac{\pp\mathcal{A}_Y}{\pp Y}\bigg|_i
+  = \frac{1}{2}\bigl[
+      \sigma_\beta(\mathrm{arg}_1)\,\mathcal{P}_2
+    - \mathcal{P}_1\,\sigma_\beta(\mathrm{arg}_2)
+  \bigr],
+\end{equation}
+where the factor $\tfrac{1}{2}$ arises from the arithmetic-mean
+interpolation $Y_i = (Y_k + Y_{k+1})/2$, so
+$\pp Y_i/\pp Y_k = \tfrac{1}{2}$.
+
+The $S'$-derivative propagates through the miscibility-curve temperature
+dependence:
+\begin{equation}\label{eq:dAY_dS}
+  \frac{\pp\mathcal{A}_Y}{\pp S'}\bigg|_i
+  = -\sigma_\beta(\mathrm{arg}_1)\,\mathcal{P}_2
+    \;\left(\frac{\pp\Yeq}{\pp T}
+    + \frac{\pp\Yeq}{\pp P}\frac{\pp P}{\pp T}\right)_{\!i}
+    \frac{T_i}{\Cp[,i]}\,\frac{S_0}{2},
+\end{equation}
+where the factor $(T_i/\Cp[,i])\,S_0$ converts an entropy perturbation
+to a temperature perturbation via the trial-temperature linearization.
+In practice, the $\pp P/\pp T$ contribution is set to zero for
+convergence stability, so the miscibility-curve sensitivity enters
+only through $\pp\Yeq/\pp T$.
+
+An analogous structure holds for $\mathcal{A}_Z$, with each
+$\softplus$ factor differentiated via the chain rule through
+$\pp Z_{1,{\rm misc}}/\pp T$ and $\pp Z_{2,{\rm misc}}/\pp T$.
+
+\subsubsection{Rain Models}
+
+Two advective models are available:
+
+\begin{itemize}
+  \item \textbf{Legacy}: The diffusion coefficient is set equal to
+    the MLT diffusivity in the rain zone; the activation product
+    $\mathcal{A}_Y$ naturally limits the flux.
+  \item \textbf{Bottom-up} \citep{Helled2025}: Identical advection
+    coefficients, but convective diffusion is smoothly suppressed in
+    the rain zone via a factor
+    \begin{equation}
+      f_{\rm supp}
+      = \frac{1}{1 + \alpha_{\rm rain}\,\softplus_\beta(\Delta Y)},
+    \end{equation}
+    where $\Delta Y = Y - \Yeq(1-Z)$ is the supersaturation and
+    $\alpha_{\rm rain}$ controls suppression strength.
+\end{itemize}
+
+\subsection{Metal Rain}\label{sec:metal_rain}
+
+Metal rain follows the same advection--diffusion structure as helium rain,
+but uses two miscibility curves $Z_{1,{\rm misc}}(P,T)$ and
+$Z_{2,{\rm misc}}(P,T)$ from either \citet{Rogers2025} (rock rain) or
+\citet{Gupta2024} (water rain):
+\begin{align}
+  \mathcal{A}_Z
+  &= \softplus_\beta(Z - Z_{1,{\rm misc}} - \delta_{Z,1})
+  \;\cdot\;
+  \softplus_\beta(Z_{2,{\rm misc}} - Z + \delta_{Z,2}).
+\end{align}
+The Jacobian includes chain-rule derivatives
+$\pp Z_{1,2,\rm misc}/\pp T$ and $\pp Z_{1,2,\rm misc}/\pp P$ for
+implicit coupling.
+
+\subsection{Time-Lagged Miscibility}
+
+Both helium and metal miscibility profiles are time-lagged to smooth
+the response:
+\begin{equation}\label{eq:Ym_lag}
+  \Yeq^{\rm lag}
+  = \frac{\Yeq^{\rm old}/\Delta t + \Yeq/\tau_m}{1/\Delta t + 1/\tau_m},
+\end{equation}
+with an analogous expression for $Z_{1,2,\rm misc}^{\rm lag}$.
+
+% ======================================================================
+\section{Boundary Conditions}\label{sec:bc}
+% ======================================================================
+
+\subsection{Atmospheric Boundary}
+
+The outer boundary condition couples the interior to an atmosphere model
+via the intrinsic temperature $\Tint$:
+\begin{equation}
+  F_{\rm surf} = \sigma_{\rm SB}\,\Tint^4,
+\end{equation}
+where $\Tint$ is a function of surface entropy, gravity, and composition.
+Multiple atmosphere tables are supported (C23/C26: \citealt{Chen2023};
+F11: \citealt{Fortney2011}; B97: \citealt{Burrows1997}; F07:
+\citealt{Fortney2007}), each providing derivatives
+$\pp\Tint/\pp S$, $\pp\Tint/\pp Y$, $\pp\Tint/\pp Z$ for the Jacobian.
+
+In the discretized residual, the surface radiative loss enters as a
+flux at the outermost boundary ($b=0$) of cell $k=0$:
+\begin{equation}\label{eq:Fsurf_disc}
+  F^{(0)}_{\rm surf}
+  = -\frac{A_{\rm geom}\,\sigma_{\rm SB}\,\Tint^4}{M_0\,T_0\,S_0},
+\end{equation}
+where $A_{\rm geom} = 4\pi R_{\rm surf}^2$ is the emitting area,
+and $M_0$, $T_0$, $S_0$ are the normalization constants defined in
+Section~\ref{sec:dimless}.  The corresponding Jacobian contributions
+to the entropy equation of the surface cell are obtained by
+differentiating Equation~(\ref{eq:Fsurf_disc}) with respect to the
+state variables.  Define the prefactor
+\begin{equation}\label{eq:surf_pref}
+  p = \frac{\Delta t}{\dd m'_0\,T'_0}
+      \;\frac{4\,A_{\rm geom}\,\sigma_{\rm SB}\,\Tint^3}
+             {M_0\,T_0\,S_0}.
+\end{equation}
+Then the surface Jacobian entries are
+\begin{align}
+  J_{0,0}   &\mathrel{+}= p\;\frac{\pp\Tint}{\pp S},
+  \label{eq:Jsurf_S}\\
+  J_{0,1}   &\mathrel{+}= p\;\frac{\pp\Tint}{\pp Y},
+  \label{eq:Jsurf_Y}\\
+  J_{0,2}   &\mathrel{+}= p\;\frac{\pp\Tint}{\pp Z},
+  \label{eq:Jsurf_Z}
+\end{align}
+where the $Y$ and $Z$ entries are included only when composition
+coupling is active.
+
+\subsection{Bare-Rock Surface}
+
+For planets without a gaseous envelope ($k_{\rm core}=0$), the surface
+cell radiates directly:
+\begin{equation}
+  F_{\rm int} = \sigma_{\rm SB}(\Tsurf^4 - T_{\rm eq}^4),
+\end{equation}
+and the Jacobian is
+\begin{equation}
+  \frac{\pp F_{\rm int}}{\pp S}
+  = \frac{\pp F_{\rm int}}{\pp\Tsurf}
+    \,\frac{T_{\rm surf}}{C_{P,{\rm surf}}}
+    \,S_0.
+\end{equation}
+The Jacobian prefactor for the bare-rock surface is
+\begin{equation}\label{eq:pref_bare}
+  p_{\rm bare}
+  = \frac{\Delta t}{\dd m'_0\,T'_0}
+    \;\frac{A_{\rm geom}}{M_0\,T_0\,S_0},
+\end{equation}
+and the entropy Jacobian entry is
+$J_{0,0} \mathrel{+}= p_{\rm bare}\,(\pp F_{\rm int}/\pp S)$,
+where
+$\pp F_{\rm int}/\pp S
+ = (\pp F_{\rm int}/\pp\Tsurf)\,(T_{\rm surf}/\Cp[,\rm surf])\,S_0$.
+Semi-gray variants (``gray'' and ``ideal gray'') are also available,
+using an optical-depth correction $\tau_{\rm match}$ at the matching
+pressure, so that the intrinsic flux becomes
+$F_{\rm int} = \sigma_{\rm SB}\,\Tsurf^4/[\tfrac{3}{4}(\tau_{\rm match}+\tfrac{2}{3})]$.
+
+\subsection{Bottom Boundary}\label{sec:bc_bottom}
+
+At the innermost boundary ($b=N$), an insulating (zero-flux) condition
+is applied.  This is enforced implicitly: all flux arrays are initialized
+to zero and populated only at interior indices $1$ through $N-1$, so
+$F_N = 0$ identically.  No Jacobian entries are generated for the
+innermost boundary.
+
+% ======================================================================
+\section{Numerical Method}\label{sec:numerics}
+% ======================================================================
+
+\subsection{Dimensionless Variables}\label{sec:dimless}
+
+All quantities entering the Newton solver are cast in dimensionless
+form to improve the conditioning of the $3N\times 3N$ linear system.
+Four reference scales are introduced:
+\begin{align}
+  S_0 &= \kbbar
+       &&\text{(entropy scale)},
+  \label{eq:S0}\\
+  T_0 &= 1000\;\mathrm{K}
+       &&\text{(temperature scale)},
+  \label{eq:T0}\\
+  M_0 &= M_{\rm planet}
+       &&\text{(mass scale)},
+  \label{eq:M0}\\
+  R_0 &= R_{\rm planet}
+       &&\text{(radius scale)}.
+  \label{eq:R0}
+\end{align}
+$M_0$ and $R_0$ are set to the planet's total mass and initial radius
+(e.g.\ $M_{\rm Jup}$ and $R_{\rm Jup}$ for a Jupiter model).
+The dimensionless state variables are
+\begin{equation}\label{eq:dimless_vars}
+  S' = \frac{S\,S_0}{\tilde{S}_0},
+  \qquad
+  T' = \frac{T}{T_0},
+  \qquad
+  \dd m' = \frac{\dd m}{M_0},
+  \qquad
+  \dd r'_i = \frac{r_{k+1} - r_k}{R_0},
+\end{equation}
+where $\tilde{S}_0 = S_0$ is a normalization constant (so $S' = S$ in
+natural units of $\kbbar$).  $Y$ and $Z$ are already dimensionless
+mass fractions and enter the state vector without rescaling.
+
+The dimensionless transport coefficients used in the residual and
+Jacobian are:
+\begin{align}
+  \varphi'  &= \frac{\varphi}{M_0\,T_0},
+  \label{eq:phi_prime}\\
+  \Lambda'  &= \frac{4\pi r'^2\,\Lambda\,R_0}{S_0\,M_0},
+  \label{eq:Lambda_prime}\\
+  \varphi'_{\rm semi}
+            &= \frac{\varphi_{\rm semi}}{M_0\,T_0},
+  \label{eq:semi_phi_prime}\\
+  Q'        &= \frac{Q_{\rm cell}}{M_0\,T_0\,S_0},
+  \label{eq:Q_prime}\\
+  \left(\frac{\pp U}{\pp Y}\right)'
+            &= \frac{1}{S_0}\frac{\pp U}{\pp Y}\bigg|_{S,\rho},
+  \qquad
+  \left(\frac{\pp U}{\pp Z}\right)'
+            = \frac{1}{S_0}\frac{\pp U}{\pp Z}\bigg|_{S,\rho},
+  \label{eq:dUdYZ_prime}\\
+  \left(\frac{\pp T}{\pp Y}\right)'
+            &= \frac{1}{T_0}\frac{\pp T}{\pp Y},
+  \qquad
+  \left(\frac{\pp T}{\pp Z}\right)'
+            = \frac{1}{T_0}\frac{\pp T}{\pp Z}.
+  \label{eq:dTdYZ_prime}
+\end{align}
+Here $\varphi$ is the convective transport prefactor
+(Equations~\ref{eq:phi_env} or \ref{eq:phi_mantle}), $\Lambda$ is the
+total thermal conductivity (Equation~\ref{eq:Frad}), $\varphi_{\rm semi}$
+is the semiconvective transport coefficient
+(Equation~\ref{eq:Fsemi}), and $Q_{\rm cell} = H_{\rm spec}\,\dd m$
+is the per-cell radiogenic power.
+
+\subsection{Spatial Discretization}\label{sec:grid}
+
+The planet is divided into $N$ mass shells (cells), indexed
+$k=0$ (outermost, surface) through $k=N-1$ (innermost, center).
+Fluxes are evaluated at $N+1$ cell boundaries (subscript~$b$, indices
+$0$ through~$N$); the $N-1$ interior boundaries (subscript~$i$,
+indices $0$ through $N-2$) lie between adjacent cells.
+
+Cell-centered quantities ($T$, $P$, $\rho$, $S$, $Y$, $Z$) are
+mapped to interior boundaries via:
+\begin{itemize}
+  \item \textbf{Geometric mean} for $T$, $P$, $\rho$, $r$:
+    \;$X_i = \sqrt{X_k\,X_{k+1}}$.
+  \item \textbf{Arithmetic mean} for $Y$, $Z$, $S$:
+    \;$X_i = (X_k + X_{k+1})/2$.
+\end{itemize}
+Radial gradients are approximated by centered finite differences:
+\begin{equation}\label{eq:fd_grad}
+  \frac{\dd X}{\dd r}\bigg|_i
+  \approx \frac{X_{k+1} - X_k}{\Delta r_i},
+  \qquad
+  \Delta r_i = r_{k+1} - r_k,
+\end{equation}
+where $r_k$ are cell-centered radii (geometric means of the bounding
+radii).
+
+Boundary masks ensure that the stencil respects domain edges: for
+cell $k=0$ only the right-hand flux contributes, and for cell
+$k=N-1$ only the left-hand flux contributes.  The outermost boundary
+($b=0$) carries the surface radiative flux
+(Section~\ref{sec:bc}); the innermost boundary ($b=N$) carries zero
+flux (Section~\ref{sec:bc_bottom}).
+
+\subsection{State Vector and Residual}\label{sec:residual}
+
+The state vector has $3N$ components, interleaving entropy,
+helium, and metallicity for each cell:
+\begin{equation}\label{eq:state_vec}
+  \mathbf{z} = (S'_0, Y_0, Z_0,\; S'_1, Y_1, Z_1,\; \ldots,\;
+                S'_{N-1}, Y_{N-1}, Z_{N-1}).
+\end{equation}
+The residual vector $\mathbf{B}(\mathbf{z})$ is assembled from the
+implicit (backward-Euler) discretization of
+Equations~(\ref{eq:entropy_master})--(\ref{eq:Z_master}).
+The root $\mathbf{B}=\mathbf{0}$ yields the updated state at
+$t+\Delta t$.
+
+\subsubsection{Entropy Residual}
+
+For cell~$k$ (row $3k$ of $\mathbf{B}$):
+\begin{equation}\label{eq:BS}
+  B_{3k}
+  = \underbrace{(S'_k - S'_{k,\rm old})}_{\text{time derivative}}
+  + \underbrace{\frac{\Delta t}{\dd m'_k\,T'_k}\,\Delta F_k}_{\text{flux divergence}}
+  + \underbrace{\frac{L}{T_0\,S_0}\,\frac{\Delta\chi_k}{T'_k}}_{\text{latent heat}}
+  + \underbrace{\frac{(\pp U/\pp Y)'_k\,(Y_k - Y_{k,\rm old})
+        + (\pp U/\pp Z)'_k\,(Z_k - Z_{k,\rm old})}{T'_k\,T_0}}_{\text{composition coupling}}
+  - \underbrace{\frac{\Delta t}{\dd m'_k\,T'_k}\,Q'_k}_{\text{radiogenic}},
+\end{equation}
+where $\Delta\chi_k = \chi_k^{n+1} - \chi_k^n$ is the melt-fraction
+change (Section~\ref{sec:latent}).  The \textbf{net flux divergence}
+across cell~$k$ is $\Delta F_k = F_{k+1/2} - F_{k-1/2}$, where each
+interior-boundary flux is the sum of three components:
+\begin{align}
+  F_{{\rm conv},i}
+    &= -\varphi'_i
+       \left|\frac{\dd S'_{\rm eff}}{\dd r'}\right|_i^{n_{\rm conv}},
+  \label{eq:Fconv_disc}\\
+  F_{{\rm rad},i}
+    &= \Lambda'_i\,
+       \frac{T'_{{\rm trial},k+1} - T'_{{\rm trial},k}}
+            {\dd r'_i},
+  \label{eq:Frad_disc}\\
+  F_{{\rm semi},i}
+    &= -\varphi'_{{\rm semi},i}
+       \left|\frac{\dd S'_{\rm semi}}{\dd r'}\right|_i.
+  \label{eq:Fsemi_disc}
+\end{align}
+Here $\varphi'_i$, $\Lambda'_i$, and $\varphi'_{{\rm semi},i}$ are
+the dimensionless transport coefficients
+(Equations~\ref{eq:phi_prime}--\ref{eq:semi_phi_prime}) evaluated at
+interior boundary~$i$.  The radiative flux uses the \emph{trial}
+temperature (Section~\ref{sec:trial_temp}) rather than the old
+hydrostatic temperature.  The sign convention in
+Equation~(\ref{eq:Fconv_disc}) follows Equation~(\ref{eq:Fconv});
+the absolute-value--power construction is smoothed by the soft-hinge
+function described in Section~\ref{sec:mlt}.  The radiogenic
+heating term $Q'_k$ is nonzero only in mantle cells
+($k_{\rm core}\le k < k_{\rm core,Fe}$).
+
+\subsubsection{Helium Residual}
+
+For cell~$k$ (row $3k+1$ of $\mathbf{B}$):
+\begin{equation}\label{eq:BY}
+  B_{3k+1}
+  = (Y_k - Y_{k,\rm old})
+  + \frac{\Delta t}{\dd m_k}\Bigl[
+      \underbrace{\sigma_{1,+}\,(Y_{k+1}-Y_k)
+                - \sigma_{1,-}\,(Y_k-Y_{k-1})}_{\text{diffusion}}
+    + \underbrace{\sigma_{2,+}\,\mathcal{A}_{Y,i+}
+                - \sigma_{2,-}\,\mathcal{A}_{Y,i-}}_{\text{advection}}
+  \Bigr],
+\end{equation}
+where $\sigma_{1,\pm}$ and $\sigma_{2,\pm}$ are the diffusive and
+advective flux coefficients (Equations~\ref{eq:sigma1}--\ref{eq:sigma2})
+evaluated at the right ($+$) and left ($-$) interior boundaries of
+cell~$k$, respectively.  The advective coefficient includes the smooth
+sign: $\sigma_{2,\pm} = \sigma_{2,i}\,\widetilde{\mathrm{sgn}}(\mathcal{A}_Y)$.
+The activation products $\mathcal{A}_{Y,i\pm}$ are evaluated at the
+corresponding boundaries from Equation~(\ref{eq:Yflux_new}).
+Terms referencing $Y_{k-1}$ vanish for $k=0$, and terms referencing
+$Y_{k+1}$ vanish for $k=N-1$.  Note that the composition residuals use
+the \emph{physical} (not dimensionless) mass element $\dd m_k$.
+
+\subsubsection{Metallicity Residual}
+
+The $Z$ residual (row $3k+2$) has the same structure as the $Y$
+residual:
+\begin{equation}\label{eq:BZ}
+  B_{3k+2}
+  = (Z_k - Z_{k,\rm old})
+  + \frac{\Delta t}{\dd m_k}\Bigl[
+      \sigma_{1,Z,+}\,(Z_{k+1}-Z_k)
+    - \sigma_{1,Z,-}\,(Z_k-Z_{k-1})
+    + \sigma_{2,Z,+}\,\mathcal{A}_{Z,i+}
+    - \sigma_{2,Z,-}\,\mathcal{A}_{Z,i-}
+  \Bigr],
+\end{equation}
+with the metal diffusive and advective coefficients $\sigma_{1,Z}$,
+$\sigma_{2,Z}$ and the dual-miscibility activation product
+$\mathcal{A}_Z$ (Section~\ref{sec:metal_rain}).
+
+\subsection{Jacobian Structure}\label{sec:jacobian}
+
+The Jacobian $\mathbf{J} = \pp\mathbf{B}/\pp\mathbf{z}$ is a
+$3N\times 3N$ matrix with a block-tridiagonal structure.  Each
+$3\times 3$ block couples the $(S', Y, Z)$ triplet of a cell to
+itself and its two neighbors, giving a total half-bandwidth of~5
+(columns $3k-3$ through $3k+5$ for row $3k$).  This sparsity is
+exploited by storing $\mathbf{J}$ in compressed sparse column (CSC)
+format.
+
+\subsubsection{Entropy Row ($3k$)}\label{sec:jac_entropy}
+
+The diagonal entry is
+\begin{equation}\label{eq:J_SS_diag}
+  J_{3k,\,3k}
+  = 1 + J_{{\rm lat},S,k}
+  + \frac{\Delta t}{\dd m'_k\,T'_k}
+    \sum_{i\in\{k-\frac{1}{2},\,k+\frac{1}{2}\}}
+    \left[
+      -\frac{\varphi'_i}{\dd r'_i}\,
+       \frac{\pp f}{\pp S'}\bigg|_i
+      -\frac{\Lambda'_i}{\dd r'_i}\,
+       \frac{T'_k}{\Cv[,k]}\,S_0
+      -\frac{\varphi'_{{\rm semi},i}}{\dd r'_i}
+    \right],
+\end{equation}
+where $J_{{\rm lat},S,k}$ is the latent-heat Jacobian contribution
+(Section~\ref{sec:latent}), $\pp f/\pp S'$ denotes the derivative
+of the convective flux function (the soft-hinge bracket raised to
+$n_{\rm conv}$) with respect to the local entropy, and the sum runs
+over the two boundaries flanking cell~$k$.  The radiative term
+carries the factor $T'_k/\Cv[,k]$ because $\pp T'/\pp S' = (T'/\Cv)\,S_0$.
+
+The off-diagonal entropy--entropy coupling to the left neighbor is
+\begin{equation}\label{eq:J_SS_km1}
+  J_{3k,\,3(k-1)}
+  = \frac{\Delta t}{\dd m'_k\,T'_k}
+    \left[
+      \frac{\varphi'_i}{\dd r'_i}\,
+       \frac{\pp f}{\pp S'}\bigg|_i
+    + \frac{\Lambda'_i}{\dd r'_i}\,
+       \frac{T'_{k-1}}{\Cv[,k-1]}\,S_0
+    + \frac{\varphi'_{{\rm semi},i}}{\dd r'_i}
+    \right],
+  \qquad (k>0),
+\end{equation}
+where all coefficients are evaluated at boundary $i=k-\tfrac{1}{2}$.
+The right-neighbor entry $J_{3k,\,3(k+1)}$ has the same form with
+$k-1\to k+1$ and boundary $i=k+\tfrac{1}{2}$.
+
+The entropy--composition coupling to $Y$ (column $3k+1$) is
+\begin{equation}\label{eq:J_SY}
+  J_{3k,\,3k+1}
+  = \frac{\Delta t}{\dd m'_k\,T'_k}
+    \sum_i\left[
+      \frac{\varphi'_i}{\dd r'_i}\,
+       \left(\frac{\pp S}{\pp Y}\right)'_{\!\!i}
+       \frac{\pp f}{\pp S'}\bigg|_i
+    - \frac{\Lambda'_i}{\dd r'_i}\,
+       \left(\frac{\pp T}{\pp Y}\right)'_{\!\!k}
+    \right]
+  + \frac{(\pp U/\pp Y)'_k}{T'_k\,T_0}
+  + J_{{\rm lat},Y,k},
+\end{equation}
+where $(\pp S/\pp Y)'_i$ is the Ledoux entropy--helium derivative
+at interior boundary~$i$.
+The $Z$-coupling $J_{3k,\,3k+2}$ is analogous with $Y\to Z$.
+
+The semiconvective flux contributes \emph{no} Jacobian terms (2026
+July rework): with the Nusselt coefficients frozen at their
+old-state, time-lagged values, $F_{\rm semi}$ is treated as a
+lagged (Picard) term --- exact in the residual, absent from
+$\mathbf{J}$ --- the same consistent inexact-Newton scheme used for
+the convective-entrainment and composition-overshoot diffusivities.
+The previous hand-derived entries were finite-difference--verified
+to be correct at semiconvectively \emph{active} faces but carried
+no gate on the $\max(\nabla_{\!S},0)$ bracket clamp, so at clamped
+(marginally stable) faces the Jacobian asserted couplings the
+residual did not possess, degrading Newton convergence precisely in
+the flickering regime the scheme must survive.
+
+When the implicit viscous transition is enabled in the mantle,
+additional terms
+$\pp F_{\rm conv}/\pp\chi\cdot\pp\chi/\pp(S',Y,Z)$ are computed
+by finite-differencing the convective flux with respect to $\chi$ at
+each mantle boundary, then propagating through
+$\pp\chi/\pp T\cdot\pp T/\pp(S',Y,Z)$.
+
+\subsubsection{Helium Row ($3k+1$)}\label{sec:jac_helium}
+
+The diagonal entry is
+\begin{equation}\label{eq:J_YY_diag}
+  J_{3k+1,\,3k+1}
+  = 1
+  + \frac{\Delta t}{\dd m_k}\Bigl[
+      -\sigma_{1,+} - \sigma_{1,-}
+      + \text{(advection product-rule terms)}
+    \Bigr],
+\end{equation}
+where the advection terms are combinations of
+$\sigma_{2,\pm}\,\widetilde{\mathrm{sgn}}\,\mathcal{P}_1/2$
+and $\sigma_{2,\pm}\,\widetilde{\mathrm{sgn}}\,\mathcal{P}_2/2$
+arising from the product-rule expansion of
+$\pp\mathcal{A}_Y/\pp Y$ (Equation~\ref{eq:dAY_dY}).
+
+The helium--entropy coupling (column $3k$) encodes the
+miscibility-curve temperature dependence:
+\begin{equation}\label{eq:J_YS}
+  J_{3k+1,\,3k}
+  = \frac{\Delta t}{\dd m_k}\,\sigma_{2,i}\,
+    \widetilde{\mathrm{sgn}}(\mathcal{A}_Y)\,\mathcal{P}_2\,
+    \left(\frac{\pp\Yeq}{\pp T}\right)_{\!\!i}
+    \frac{T_i}{\Cp[,i]}\,\frac{S_0}{2},
+\end{equation}
+with opposite signs for the left and right boundary contributions.
+Off-diagonal Y--Y couplings to neighbors $k\pm1$ contain the
+diffusive $\pm\sigma_1$ terms and advective corrections from
+$\pp\mathcal{A}_Y/\pp Y_{k\pm1}$.
+
+\subsubsection{Metallicity Row ($3k+2$)}\label{sec:jac_metal}
+
+The $Z$ Jacobian has the same structure as the $Y$ Jacobian but
+involves derivatives of both miscibility curves.  The
+entropy--metallicity coupling includes terms proportional to
+$\pp Z_{1,{\rm misc}}/\pp T$ and $\pp Z_{2,{\rm misc}}/\pp T$,
+each multiplied by the corresponding $\softplus$ factor from the
+dual activation product $\mathcal{A}_Z$
+(Section~\ref{sec:metal_rain}).
+
+\subsubsection{Surface Jacobian Terms}
+
+For the outermost cell ($k=0$), the surface radiative-loss Jacobian
+entries (Equations~\ref{eq:Jsurf_S}--\ref{eq:Jsurf_Z}) are added to
+the entropy row.  These couple the surface entropy, helium, and
+metallicity to the atmosphere boundary condition
+(Section~\ref{sec:bc}).
+
+\subsection{Newton--Raphson Iteration}\label{sec:newton}
+
+The coupled $3N\times 3N$ system $\mathbf{B}(\mathbf{z})=\mathbf{0}$ is
+solved by a damped Newton iteration.  At each iterate~$n$:
+\begin{equation}\label{eq:NR}
+  \mathbf{J}^{(n)}\,\delta\mathbf{z}
+  = \mathbf{B}^{(n)},
+  \qquad
+  \mathbf{z}^{(n+1)}
+  = \mathbf{z}^{(n)} - w_{\rm eff}\,\delta\mathbf{z},
+\end{equation}
+where $w_{\rm eff}\le 1$ is the effective damping weight after
+backtracking (Section~\ref{sec:trust}).  The sparse linear system is
+assembled as a CSC matrix and solved via
+\texttt{scipy.sparse.linalg.spsolve} (a direct sparse LU
+factorization).
+
+The full algorithm proceeds as follows:
+\begin{enumerate}
+  \item \textbf{Initialize.}
+    Set $\mathbf{z}^{(0)} = (S'_{0,\rm old}, Y_{0,\rm old},
+    Z_{0,\rm old}, \ldots)$ from the previous timestep.
+    Set the damping weight $w = w_{\rm config}$ (typically 1),
+    convergence error $\epsilon=1$, iteration counter $n=0$,
+    and restart counter $r=0$.
+
+  \item \textbf{Iterate} while
+    $\epsilon > \epsilon_{\rm tol}$ (and
+    $\epsilon_{\rm flux} > \epsilon_{\rm flux,tol}$ if
+    high-precision mode is active):
+    \begin{enumerate}
+      \item[(a)] Compute the trial temperature
+        $T'_{\rm trial}$ from the current iterate
+        (Section~\ref{sec:trial_temp}).
+      \item[(b)] Evaluate all transport coefficients:
+        convective prefactor~$\varphi'$,
+        thermal conductivity~$\Lambda'$,
+        semiconvective coefficient~$\varphi'_{\rm semi}$,
+        diffusion coefficients $D_Y$, $D_Z$,
+        advective coefficients $D_2$, $D_{2Z}$,
+        miscibility curves $\Yeq$, $Z_{1,2,\rm misc}$,
+        activation products $\mathcal{A}_Y$, $\mathcal{A}_Z$,
+        and melt fraction~$\chi$.
+      \item[(c)] Assemble $\mathbf{J}$ and $\mathbf{B}$ as described in
+        Sections~\ref{sec:residual}--\ref{sec:jacobian}.
+      \item[(d)] Convert $\mathbf{J}$ to sparse CSC format and solve
+        $\mathbf{J}\,\delta\mathbf{z} = \mathbf{B}$.
+        If $\delta\mathbf{z}$ contains non-finite entries, raise a
+        failure and proceed to step~3.
+      \item[(e)] Apply the damped step with trust-region backtracking
+        (Section~\ref{sec:trust}) to obtain $\mathbf{z}^{(n+1)}$
+        and the effective step $w_{\rm eff}\,\delta\mathbf{z}$.
+      \item[(f)] Evaluate the convergence error
+        (Section~\ref{sec:convergence}).
+      \item[(g)] Update: set $\mathbf{z}^{(n)} \leftarrow \mathbf{z}^{(n+1)}$;
+        extract $S' = z_{::3}$, $Y = z_{1::3}$, $Z = z_{2::3}$.
+        Clip any negative $Z$ entries to zero.
+        Increment~$n$; break if $n > 150$.
+    \end{enumerate}
+
+  \item \textbf{On failure} (non-finite $\delta\mathbf{z}$, or
+    backtracking exhausted):
+    increment $r$.  If $r > 3$, raise a fatal error.
+    Otherwise, halve the damping weight ($w \leftarrow w/2$) and
+    restart from $\mathbf{z}^{(0)}$.
+
+  \item \textbf{Post-process.}
+    Convert back to physical units:
+    $S_{\rm new} = S'\,S_0/\tilde{S}_0$.
+    Multiply all flux arrays by $M_0\,T_0\,S_0$ to recover
+    physical units (erg\,s$^{-1}$).
+    Optionally enforce core entropy monotonicity
+    ($S_{k,\rm new} \le S_{k,\rm old}$ for $k \ge k_{\rm core,Fe}$).
+\end{enumerate}
+
+\subsubsection{Trust-Region Guards}\label{sec:trust}
+
+Given the Newton correction $\delta\mathbf{z}$, the step
+$\mathbf{z}_{\rm cand} = \mathbf{z}^{(n)} - w\,\delta\mathbf{z}$
+is tested against three guards.  Starting from $w = w_{\rm config}$
+and halving up to 10 times:
+\begin{enumerate}
+  \item \textbf{Finiteness:} all entries of $\mathbf{z}_{\rm cand}$
+    must be finite (no NaN or $\pm\infty$).
+  \item \textbf{Entropy floor:} all entropy entries must satisfy
+    $S'_k > S_{\rm floor}$, where $S_{\rm floor} = 10^{-4}$.
+  \item \textbf{Relative entropy cap:} the per-cell relative change
+    must satisfy
+    \begin{equation}\label{eq:trust_cap}
+      \frac{|\Delta S'_k|}{\max(|S'_k|,\;S_{\rm floor})}
+      < 0.25
+      \qquad \forall\;k.
+    \end{equation}
+    This limit prevents violent melt-fraction and viscosity swings
+    near the solidification front, where $\chi(T)$ is steep.
+\end{enumerate}
+If all three guards pass, the candidate is accepted with
+$w_{\rm eff} = w$.  If 10 halvings are exhausted without
+satisfying the guards, a failure is raised and the solver
+proceeds to the restart logic (step~3 above).
+
+\subsubsection{Convergence}\label{sec:convergence}
+
+Iteration terminates when the relative step norm falls below
+a tolerance:
+\begin{equation}\label{eq:conv_crit}
+  \epsilon
+  = \max_i \frac{|w_{\rm eff}\,\delta z_i|}
+                 {\max(|z_i|,\;z_{\rm floor})}
+  < \epsilon_{\rm tol},
+\end{equation}
+with $z_{\rm floor} = 10^{-10}$ and a typical
+$\epsilon_{\rm tol}\sim10^{-10}$.  In high-precision mode, an
+additional flux-convergence criterion is enforced:
+\begin{equation}\label{eq:flux_conv}
+  \epsilon_{\rm flux}
+  = \max_j\frac{|F_j^{(n)} - F_j^{(n-1)}|}
+               {\max(|F_j^{(n)}|,\;|F_j^{(n-1)}|)}
+  < \epsilon_{\rm flux,tol},
+\end{equation}
+where the maximum runs over all flux arrays (convective, radiative,
+semiconvective, latent, helium diffusion/advection, and metal
+diffusion/advection).
+
+\subsection{Trial Temperature}\label{sec:trial_temp}
+
+At each Newton iterate, a trial temperature is constructed by
+linearizing around the previous hydrostatic state:
+\begin{equation}\label{eq:Ttrial}
+  T'_{\rm trial}
+  = T' + \frac{T'}{C_{V,{\rm safe}}}\,S_0\,(S' - S'_{\rm old})
+  + \left(\frac{\pp T'}{\pp Y}\right)(Y - Y_{\rm old})
+  + \left(\frac{\pp T'}{\pp Z}\right)(Z - Z_{\rm old}),
+\end{equation}
+where $T'$ and the partial derivatives $\pp T'/\pp Y$,
+$\pp T'/\pp Z$ are evaluated from the last accepted hydrostatic
+state, and $C_{V,{\rm safe}} = \max(C_V,\,10^{-99})$ guards
+against division by zero in degenerate zones.
+
+The trial temperature is \emph{not} simply a diagnostic; it
+enters the solver in three critical ways:
+\begin{enumerate}
+  \item \textbf{Melt fraction.}
+    $\chi(T_{\rm trial})$ is recomputed from
+    Equation~(\ref{eq:chi}) and relaxed toward the previous $\chi$
+    (Equation~\ref{eq:chi_relax}).  This determines the latent-heat
+    source term and the viscous transport geometry in the mantle.
+  \item \textbf{Radiative flux.}
+    The temperature difference
+    $\Delta T'_{\rm trial} = T'_{{\rm trial},k+1} - T'_{{\rm trial},k}$
+    enters the radiative flux
+    (Equation~\ref{eq:Frad_disc}), making the conductive heat
+    transport respond to the evolving state within each Newton step.
+  \item \textbf{Miscibility activation.}
+    The implicit temperature correction $\delta_{\rm imp}$ in the
+    activation product (Equation~\ref{eq:Yflux_new}) depends on
+    $S - S_{\rm old}$, which is driven by the trial temperature.
+\end{enumerate}
+This coupling ensures that the Newton solver sees a self-consistent
+thermodynamic state at each iteration, rather than lagging behind
+the hydrostatic update.
+
+% ======================================================================
+\section{Eddy Overshoot}\label{sec:overshoot}
+% ======================================================================
+
+An optional artificial overshoot transport augments the thermal
+conductivity at envelope boundaries near the envelope--mantle interface:
+\begin{equation}
+  \kappa_{\rm ov}(r)
+  = f_{\rm ov}\,v_{\rm MLT,anchor}\,H_{P,{\rm anchor}}
+    \,\exp\!\left(-\frac{|r - r_{\rm EMB}|}{f_{H_P}\,H_{P,{\rm EMB}}}\right),
+\end{equation}
+where $v_{\rm MLT,anchor}$ is the convective velocity at the
+strongest-bracket mantle boundary and $f_{\rm ov}$ is a user-specified
+efficiency factor.  The resulting conductive enhancement
+$\Lambda_{\rm ov} = \rho\,\Cp\,\kappa_{\rm ov}$ is capped at a
+configurable multiple of the local conductivity.
+
+% ======================================================================
+
+\begin{acknowledgments}
+ORCHARD builds on the APPLE code \citep{Sur2024}.
+\end{acknowledgments}
+
+\bibliography{transport_methods}
+\bibliographystyle{aasjournal}
+
+\end{document}

@@ -1,0 +1,24 @@
+# ORCHARD conda environment (clean + pinned direct dependencies)
+# Derived from a tested local `apple_env` on 2026-02-23 and trimmed to the
+# packages ORCHARD needs directly. Versions are pinned for reproducibility.
+#
+# Create:
+#   conda env create -f environment.yaml
+# Activate:
+#   conda activate orchard_env
+name: orchard_env
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.13
+  - pip=26.0.1
+  - astropy=7.2.0
+  - h5py=3.16.0
+  - jupyter=1.1.1
+  - matplotlib=3.10.8
+  - numba=0.63.1
+  - numpy=2.3.5
+  - pandas=3.0.2
+  - scipy=1.17.1
+  - tqdm=4.67.3

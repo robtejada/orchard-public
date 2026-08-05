@@ -1,0 +1,930 @@
+% EOS Methods Writeup — AASTeX63 format
+% Drop this file into an Overleaf AASTeX project
+\documentclass[twocolumn]{aastex701}
+
+\usepackage{amsmath,amssymb}
+\usepackage{bm}
+
+\shorttitle{EOS Mixing and Inversion Methods}
+\shortauthors{Tejada Arevalo}
+
+\begin{document}
+
+\title{Equation of State Framework: Volume Addition Law, Inversions, and Thermodynamic Derivatives}
+
+\author{Roberto Tejada Arevalo}
+\email{rarevalo@ucsc.edu}
+\affiliation{University of California, Santa Cruz}
+
+\begin{abstract}
+We describe the computational framework used to construct multi-component equations of state (EOS) for planetary interior modeling.
+The framework combines hydrogen--helium EOS tables with heavy-element EOS data via the volume addition law (VAL), incorporates ideal and non-ideal entropy of mixing corrections, performs numerical inversions between thermodynamic coordinate systems using hybrid root-finding algorithms, and computes thermodynamic derivatives relevant to convective stability.
+\end{abstract}
+
+\keywords{planets and satellites: interiors --- equation of state --- methods: numerical}
+
+%============================================================
+\section{Introduction}\label{sec:intro}
+%============================================================
+
+Modeling planetary interiors requires an equation of state that spans a wide range of pressures ($10^{6}$--$10^{14}\;\mathrm{dyn\;cm^{-2}}$), temperatures ($10^{2}$--$10^{5}\;\mathrm{K}$), and compositions.
+We parameterize the composition by the helium mass fraction $Y$ and the total heavy-element (metal) mass fraction $Z$, so that the hydrogen mass fraction is $X = 1 - Y - Z$.
+The heavy-element component may itself be a mixture of water, methane, ammonia, silicates (post-perovskite, MgSiO$_3$), and iron.
+
+We adopt pre-computed EOS tables for pure hydrogen and pure helium \citep[e.g.,][]{Chabrier2019,Chabrier2021} and for heavy elements such as the AQUA water EOS \citep{Haldemann2020}, and combine them using the volume addition law.
+Non-ideal mixing corrections for the H--He system follow \citet{Howard2023a}.
+
+In the following sections we describe (1) the volume addition law and entropy of mixing (\S\ref{sec:val}), (2) the interpolation architecture (\S\ref{sec:interp}), (3) the inversion procedure for changing thermodynamic basis (\S\ref{sec:inversion}), (4) the derived thermodynamic quantities (\S\ref{sec:derivatives}), and (5) the ideal gas EOS with molecular rotational and vibrational degrees of freedom (\S\ref{sec:ideal_eos}).
+
+%============================================================
+\section{Volume Addition Law}\label{sec:val}
+%============================================================
+
+The volume addition law (VAL) constructs a multi-component EOS by assuming that each species occupies its pure-substance specific volume at the mixture pressure and temperature.
+We work with mass-specific (per gram) quantities throughout.
+
+\subsection{Notation}\label{sec:notation}
+
+We define the \emph{helium prime fraction} $Y' \equiv Y/(1-Z)$, which is the helium mass fraction within the hydrogen--helium sub-mixture.
+Quantities subscripted ``$xy$'' refer to the H--He component evaluated at $(P,T,Y')$; quantities subscripted ``$z$'' refer to the heavy-element component evaluated at $(P,T)$.
+
+\subsection{Density}\label{sec:val_rho}
+
+The specific volume of the mixture is
+\begin{equation}\label{eq:val_rho}
+    v_{\rm mix} = v_{xy}(P,T,Y')\,(1-Z) + \frac{Z}{\rho_z(P,T)},
+\end{equation}
+where the H--He specific volume is itself constructed from the pure-species volumes:
+\begin{equation}\label{eq:vxy}
+    v_{xy} = \frac{1-Y'}{\rho_{\rm H}(P,T)} + \frac{Y'}{\rho_{\rm He}(P,T)} + \Delta v_{\rm mix}(P,T,Y').
+\end{equation}
+Here $\Delta v_{\rm mix}$ is the non-ideal volume of mixing from \citet{Howard2023a}, parameterized as
+\begin{equation}\label{eq:vmix}
+    \Delta v_{\rm mix}(P,T,Y') = \widetilde{V}_{\rm mix}(P,T)\,(1-Y')\,Y',
+\end{equation}
+where $\widetilde{V}_{\rm mix}(P,T)$ is interpolated from tabulated interaction data.
+When the \citet{Chabrier2021} (CD21) tables are used, the H--He interaction terms are already folded into the tables and $\Delta v_{\rm mix} = 0$.
+The mixture density follows as $\rho_{\rm mix} = 1/v_{\rm mix}$.
+
+For heavy-element mixtures (e.g., ice--rock), the heavy-element density is itself obtained by volume addition:
+\begin{equation}
+    \frac{1}{\rho_z} = \frac{1-f_{\rm rock}}{\rho_{\rm ice}(P,T)} + \frac{f_{\rm rock}}{\rho_{\rm rock}(P,T)},
+\end{equation}
+where $f_{\rm rock}$ is the rock mass fraction within the heavy-element component.
+
+\subsection{Entropy}\label{sec:val_s}
+
+The mixture entropy per unit mass is
+\begin{equation}\label{eq:val_s}
+    s_{\rm mix} = s_{xy}\,(1-Z) + s_z\,Z + s_{\rm mix,id} + \Delta s_{\rm mix,nonid}\,(1-Z),
+\end{equation}
+where $s_{xy}$ is the H--He entropy constructed from pure-species entropies (without the ideal mixing term):
+\begin{equation}\label{eq:sxy}
+    s_{xy} = s_{\rm H}(P,T)\,(1-Y') + s_{\rm He}(P,T)\,Y'.
+\end{equation}
+The ideal entropy of mixing $s_{\rm mix,id}$ and the non-ideal correction $\Delta s_{\rm mix,nonid}$ are described in \S\ref{sec:smix}.
+
+\subsection{Internal Energy}\label{sec:val_u}
+
+The mixture internal energy per unit mass is
+\begin{equation}\label{eq:val_u}
+    u_{\rm mix} = u_{xy}(P,T,Y')\,(1-Z) + u_z(P,T)\,Z,
+\end{equation}
+where
+\begin{equation}
+    u_{xy} = u_{\rm H}(P,T)\,(1-Y') + u_{\rm He}(P,T)\,Y' + \Delta u_{\rm mix}(P,T,Y'),
+\end{equation}
+and $\Delta u_{\rm mix} = \widetilde{U}_{\rm mix}(P,T)\,(1-Y')\,Y'$ is the non-ideal internal energy of mixing \citep{Howard2023a}.
+
+\subsection{Entropy of Mixing}\label{sec:smix}
+
+\subsubsection{Ideal Entropy of Mixing}
+
+For a mixture of $N$ molecular species with mass fractions $\{f_i\}$ and molecular weights $\{\mu_i\}$, the ideal entropy of mixing per unit mass (in units of $k_B$ per baryon) is
+\begin{equation}\label{eq:smix_id}
+    s_{\rm mix,id} = -\frac{1}{\bar{\mu}} \sum_{i=1}^{N} x_i \ln x_i,
+\end{equation}
+where the number fractions are
+\begin{equation}
+    x_i = \frac{f_i / \mu_i}{\sum_j f_j / \mu_j},
+\end{equation}
+and the mean molecular weight is
+\begin{equation}
+    \bar{\mu} = \sum_{i=1}^{N} \mu_i\, x_i.
+\end{equation}
+Our framework supports up to seven species: H ($\mu=1$), He ($\mu=4.003$), H$_2$O ($\mu=18.015$), CH$_4$ ($\mu=16.04$), NH$_3$ ($\mu=17.031$), MgSiO$_3$ ($\mu=100.389$), and Fe ($\mu=55.845$).
+When a species has zero mass fraction, we use a guarded logarithm $x_i \ln x_i \to 0$ in the limit $x_i \to 0$.
+
+For the special case of a binary H--He mixture, this reduces to
+\begin{equation}\label{eq:smix_id_y}
+    s_{\rm mix,id}^{(xy)} = -\frac{x_{\rm H}\ln x_{\rm H} + x_{\rm He}\ln x_{\rm He}}{\mu_{\rm H}\,x_{\rm H} + \mu_{\rm He}\,x_{\rm He}},
+\end{equation}
+where $x_{\rm He} = Y'/\mu_{\rm He}\,/\,(Y'/\mu_{\rm He} + (1-Y')/\mu_{\rm H})$.
+
+\subsubsection{Non-Ideal Entropy of Mixing}
+
+The non-ideal correction to the H--He entropy of mixing is
+\begin{equation}\label{eq:smix_nonid}
+    \Delta s_{\rm mix,nonid} = \widetilde{S}_{\rm mix}(P,T)\,(1-Y')\,Y' - s_{\rm mix,id}^{(xy)},
+\end{equation}
+where $\widetilde{S}_{\rm mix}(P,T)$ is interpolated from the tabulated total (ideal + non-ideal) entropy of mixing of \citet{Howard2023a}.
+This correction is applied only when the CMS19 H--He tables are used; for the CD21 tables the interaction terms are already included.
+
+\subsubsection{Composition Parameterization}
+
+The heavy-element mass fractions may be specified in two ways:
+\begin{enumerate}
+    \item \textbf{Nested conditional fractions:} The mass fractions are defined hierarchically as $f_{\rm H} = (1-Y')(1-Z_w)(1-Z_m)(1-Z_a)(1-Z_r)(1-Z_{\rm Fe})$, $f_{\rm He} = Y'(1-Z_w)\cdots$, $f_{\rm H_2O} = Z_w(1-Z_m)\cdots$, etc.
+    \item \textbf{Absolute (physical) mass fractions:} The mass fractions $\{f_i\}$ are specified directly and must satisfy $\sum_i f_i = 1$.
+\end{enumerate}
+The first parameterization is natural for the nested VAL construction; the second is used for ice--rock mixtures where the physical fractions within the $Z$ component are specified independently.
+
+%============================================================
+\section{Interpolation Architecture}\label{sec:interp}
+%============================================================
+
+\subsection{Table Structure}
+
+Thermodynamic quantities are stored on regular grids and accessed via multi-linear interpolation using \texttt{scipy.interpolate.RegularGridInterpolator}.
+The tables are four-dimensional, with coordinates depending on the thermodynamic basis:
+
+\begin{enumerate}
+    \item \textbf{$P$--$T$ tables:} Coordinates $(\log P,\;\log T,\;Y,\;Z)$.
+    Dependent variables: $s(P,T,Y,Z)$, $\log\rho(P,T,Y,Z)$, $\log u(P,T,Y,Z)$.
+    Units: $s$ in $\mathrm{erg\;g^{-1}\;K^{-1}}$, $\rho$ in $\mathrm{g\;cm^{-3}}$, $u$ in $\mathrm{erg\;g^{-1}}$, $P$ in $\mathrm{dyn\;cm^{-2}}$.
+
+    \item \textbf{$\rho$--$T$ tables:} Coordinates $(\log\rho,\;\log T,\;Y,\;Z)$.
+    Dependent variables: $s(\rho,T,Y,Z)$, $\log P(\rho,T,Y,Z)$.
+
+    \item \textbf{$S$--$P$ tables:} Coordinates $(s,\;\log P,\;Y,\;Z)$, with $s$ in $k_B\;\mathrm{baryon}^{-1}$.
+    Dependent variables: $\log T(s,P,Y,Z)$, $\log\rho(s,P,Y,Z)$.
+
+    \item \textbf{$S$--$\rho$ tables:} Coordinates $(s,\;\log\rho,\;Y,\;Z)$.
+    Dependent variables: $\log P(s,\rho,Y,Z)$, $\log T(s,\rho,Y,Z)$.
+\end{enumerate}
+
+The $P$--$T$ tables are the primary (native) representation and are constructed directly from the VAL.
+The remaining tables are produced by numerical inversion of the $P$--$T$ tables (\S\ref{sec:inversion}).
+
+\subsection{Pure-Species Interpolators}
+
+For the CMS19 and CD21 H--He EOS, the pure hydrogen and pure helium tables are stored separately as 2D grids on $(\log P, \log T)$ and interpolated independently before being combined via the VAL.
+Non-ideal mixing quantities $\widetilde{S}_{\rm mix}$, $\widetilde{V}_{\rm mix}$, and $\widetilde{U}_{\rm mix}$ from \citet{Howard2023a} are likewise stored on 2D $(\log P, \log T)$ grids.
+
+\subsection{Multi-Fraction Extension}
+
+For models requiring a variable rock-to-ice ratio, the tables are extended to five dimensions by stacking pre-computed 4D tables at discrete rock fractions $f_{\rm ppv} \in \{0.0, 0.25, 0.5, 0.75, 1.0\}$.
+The resulting interpolators have coordinates $(\log P, \log T, Y, Z, f_{\rm ppv})$ and support continuous interpolation in all five dimensions.
+
+%============================================================
+\section{EOS Inversions}\label{sec:inversion}
+%============================================================
+
+\subsection{Motivation}
+
+Stellar and planetary structure codes require the EOS in different thermodynamic bases depending on the formulation of the structure equations.
+For example, adiabatic interior models naturally work in entropy--pressure $(s,P)$ coordinates, while hydrodynamic simulations may require density--temperature $(\rho,T)$ or entropy--density $(s,\rho)$ representations.
+
+Since the VAL provides thermodynamic quantities as functions of $(P,T)$, obtaining quantities in other coordinate systems requires numerical inversion.
+We solve for the dependent variables by root-finding.
+
+\subsection{Inversion Strategy}\label{sec:inv_strategy}
+
+Consider the generic problem of finding $\log T$ given $(s, \log P, Y, Z)$.
+We define the error function
+\begin{equation}\label{eq:err_sp}
+    \varepsilon(\log T) = \frac{s_{\rm VAL}(\log P, \log T, Y, Z)}{s_{\rm target}} - 1,
+\end{equation}
+and seek $\log T^*$ such that $\varepsilon(\log T^*) = 0$.
+
+The initial guess is obtained from an ideal-gas EOS or, when available, from the solution at the previous composition point to accelerate convergence across the $Z$ grid.
+
+\subsubsection{Hybrid Newton--Brentq Method}
+
+Our default solver (``newton\_brentq'') proceeds as follows:
+\begin{enumerate}
+    \item Attempt Newton's method with tolerance $10^{-5}$ and a maximum of 100 iterations.
+    \item If Newton's method fails to converge (raises a \texttt{RuntimeError}), fall back to Brent's method:
+    \begin{enumerate}
+        \item Initialize a bracketing interval $[a,b] = [\log T_{\rm guess} - \delta,\;\log T_{\rm guess} + \delta]$ with $\delta = 0.1$.
+        \item If $\varepsilon(a)\,\varepsilon(b) < 0$, apply \texttt{brentq} with tolerance $10^{-5}$.
+        \item Otherwise, expand the interval by a factor of 2 and retry, up to 5 attempts.
+    \end{enumerate}
+    \item If both methods fail, the point is flagged as non-converged and assigned \texttt{NaN}.
+\end{enumerate}
+
+The same strategy is applied for all single-variable inversions:
+\begin{itemize}
+    \item $T(s, P)$: invert $s(P,T) = s_{\rm target}$,
+    \item $P(\rho, T)$: invert $\rho(P,T) = \rho_{\rm target}$,
+    \item $T(\rho, P)$: invert $\rho(P,T) = \rho_{\rm target}$ for $T$,
+    \item $P(s, \rho)$: invert $s(P,T)$ and $\rho(P,T)$ for $P$,
+    \item $T(s, \rho)$: invert similarly for $T$.
+\end{itemize}
+
+\subsubsection{Two-Dimensional Inversion}
+
+For the simultaneous inversion $(s, \rho) \to (P, T)$, we solve a coupled system:
+\begin{equation}
+    \bm{F}(\log P, \log T) = \begin{pmatrix} s_{\rm VAL}(\log P, \log T)/s_{\rm target} - 1 \\ \log\rho_{\rm VAL}(\log P, \log T)/\log\rho_{\rm target} - 1 \end{pmatrix} = \bm{0},
+\end{equation}
+using \texttt{scipy.optimize.root} with the Powell hybrid method, or alternatively a Nelder--Mead simplex minimization of $|\bm{F}|^2$.
+
+\subsection{Post-Inversion Corrections}\label{sec:glitch}
+
+Numerical inversions may produce isolated outliers (``glitches'') or fail to converge at scattered points.
+We apply a multi-stage correction pipeline along the composition ($Z$) axis at each $(s,P)$ or $(\rho,T)$ grid point:
+
+\begin{enumerate}
+    \item \textbf{Non-converged point interpolation:} Points where root-finding failed are replaced by linear (or quadratic) interpolation from the converged neighbors along the $Z$ axis.
+
+    \item \textbf{Adaptive Hampel filter (two passes):} At each point $i$ along the $Z$ axis, we compute the local median $\tilde{y}$ and the median absolute deviation $\mathrm{MAD} = 1.4826\,\mathrm{median}(|y_j - \tilde{y}|)$ within a sliding window.
+    Points satisfying $|y_i - \tilde{y}| > 3\,\mathrm{MAD}$ are flagged as outliers and replaced by the local median.
+    Two passes are applied to catch cascaded glitches.
+
+    \item \textbf{NaN interpolation:} Any remaining \texttt{NaN} values are filled by 1D linear interpolation (with extrapolation at the boundaries) using the valid neighbors.
+
+    \item \textbf{Gaussian smoothing} (optional): For the coldest entropy slices ($s \leq 3\;k_B\;\mathrm{baryon}^{-1}$), a 1D Gaussian filter with $\sigma=3$ grid points is applied along the $Z$ axis to suppress residual noise from phase transitions in the water EOS.
+\end{enumerate}
+
+\subsection{Table Generation}
+
+The complete inversion pipeline loops over all grid points of the target coordinate system.
+For example, to generate $S$--$P$ tables, we loop over $(s_i, \log P_j)$ and, for each pair, solve for $\log T$ and then evaluate $\log\rho$ at all $(Y_k, Z_l)$ values.
+The composition axis is swept sequentially, using the previous $Y$ solution as the initial guess for the next, while the $(s, P)$ axes are independent and can be parallelized.
+
+%============================================================
+\section{Derived Thermodynamic Quantities}\label{sec:derivatives}
+%============================================================
+
+All derivatives are computed by centered finite differences on the tabulated or inverted EOS.
+We adopt the convention that $\ln$ denotes the natural logarithm and $\log$ denotes $\log_{10}$.
+
+\subsection{Heat Capacities}
+
+The specific heat at constant pressure is
+\begin{equation}\label{eq:cp}
+    C_P = T\left(\frac{\partial s}{\partial T}\right)_{\!P,Y,Z} = \frac{\partial s}{\partial \ln T}\bigg|_{P,Y,Z} \approx \frac{s(\log T + \delta) - s(\log T - \delta)}{2\,\delta\,\ln 10},
+\end{equation}
+where $\delta$ is a small step in $\log T$ (default $\delta = 0.1$).
+
+Equivalently, when working in $(s,P)$ coordinates:
+\begin{equation}
+    C_P = \frac{2\,\Delta s}{\left[\log T(s+\Delta s) - \log T(s-\Delta s)\right]\,\ln 10},
+\end{equation}
+where $\Delta s$ is a step in entropy (default $\Delta s = 0.1\;k_B\;\mathrm{baryon}^{-1}$) and the unit conversion from $\mathrm{erg\;g^{-1}\;K^{-1}}$ to $k_B\;\mathrm{baryon}^{-1}$ is applied.
+
+The specific heat at constant volume is computed analogously:
+\begin{equation}\label{eq:cv}
+    C_V = \frac{\partial s}{\partial \ln T}\bigg|_{\rho,Y,Z} \approx \frac{s(\rho, \log T + \delta) - s(\rho, \log T - \delta)}{2\,\delta\,\ln 10}.
+\end{equation}
+
+\subsection{Adiabatic Gradient}
+
+The adiabatic temperature gradient is
+\begin{equation}\label{eq:nabla_ad}
+    \nabla_{\rm ad} \equiv \frac{\partial \log T}{\partial \log P}\bigg|_{s,Y,Z} \approx \frac{\log T(s, \log P + \delta) - \log T(s, \log P - \delta)}{2\,\delta},
+\end{equation}
+with default $\delta = 10^{-2}$.
+
+The adiabatic entropy profile $s_{\rm ad}(P)$ is obtained by solving for the entropy that satisfies $\nabla = \nabla_{\rm ad}$ along a given pressure--temperature profile, using root-finding on the error function
+\begin{equation}
+    \varepsilon_{\nabla}(s) = \frac{\nabla_{\rm ad}(s, P)}{\nabla_{\rm profile}} - 1 = 0,
+\end{equation}
+where $\nabla_{\rm profile} = d\log T / d\log P$ is computed from the input $(P,T)$ profile.
+
+\subsection{First Adiabatic Index}
+
+The first adiabatic index is
+\begin{equation}\label{eq:gamma1}
+    \Gamma_1 \equiv \frac{\partial \ln P}{\partial \ln \rho}\bigg|_{s,Y,Z} = \frac{\partial \log P}{\partial \log \rho}\bigg|_{s,Y,Z} \approx \frac{2\,\delta}{\log\rho(s, \log P + \delta) - \log\rho(s, \log P - \delta)}.
+\end{equation}
+
+\subsection{Composition Derivatives and Convective Stability}\label{sec:composition}
+
+The Schwarzschild criterion for convective instability requires the entropy derivative at constant $P$ and $T$:
+\begin{equation}
+    \frac{\partial s}{\partial Y}\bigg|_{P,T,Z} \approx \frac{s(Y + \delta_Y) - s(Y - \delta_Y)}{2\,\delta_Y}.
+\end{equation}
+An analogous expression holds for $\partial s/\partial Z|_{P,T,Y}$.
+
+\subsubsection{Ledoux Derivatives via the Triple Product Rule}
+
+The Ledoux criterion requires $\partial s/\partial Y|_{\rho,P,Z}$, which is not directly accessible from the tables.
+We compute it using the triple product rule in the $(s,\rho)$ basis:
+\begin{equation}\label{eq:triple}
+    \frac{\partial s}{\partial Y}\bigg|_{\rho,P,Z} = -\frac{(\partial P/\partial Y)_{s,\rho,Z}}{(\partial P/\partial s)_{\rho,Y,Z}},
+\end{equation}
+where each partial derivative on the right-hand side is evaluated by centered finite differences on the $(s,\rho)$ tables.
+Explicitly:
+\begin{equation}
+    \left(\frac{\partial P}{\partial s}\right)_{\!\rho,Y,Z} \approx \frac{P(s+\Delta s, \rho) - P(s-\Delta s, \rho)}{2\,\Delta s / (k_B/m_u)},
+\end{equation}
+\begin{equation}
+    \left(\frac{\partial P}{\partial Y}\right)_{\!s,\rho,Z} \approx \frac{P(s, \rho, Y+\delta_Y) - P(s, \rho, Y-\delta_Y)}{2\,\delta_Y}.
+\end{equation}
+The same approach yields $\partial s/\partial Z|_{\rho,P,Y}$ by replacing $Y$ with $Z$ in the numerator.
+
+\subsubsection{Susceptibility Coefficients}
+
+The logarithmic susceptibility coefficients, evaluated in the $(\rho, T)$ basis, are
+\begin{align}
+    \chi_T &\equiv \frac{\partial \ln P}{\partial \ln T}\bigg|_{\rho,Y,Z}, \\
+    \chi_Y &\equiv \frac{\partial \ln P}{\partial Y}\bigg|_{\rho,T,Z}, \\
+    \chi_Z &\equiv \frac{\partial \ln P}{\partial Z}\bigg|_{\rho,T,Y}.
+\end{align}
+The temperature response to composition changes at constant $(\rho,P)$ is then
+\begin{equation}
+    \frac{\partial \ln T}{\partial Y}\bigg|_{\rho,P,Z} = \frac{\chi_Y}{\chi_T}, \qquad
+    \frac{\partial \ln T}{\partial Z}\bigg|_{\rho,P,Y} = \frac{\chi_Z}{\chi_T}.
+\end{equation}
+
+\subsection{Density Response}
+
+The Brunt--V\"ais\"al\"a frequency requires the density response to entropy changes at constant pressure:
+\begin{equation}
+    \frac{\partial \ln \rho}{\partial s}\bigg|_{P,Y,Z} \approx \frac{[\log\rho(s+\Delta s) - \log\rho(s-\Delta s)]\,\ln 10}{2\,\Delta s / (k_B/m_u)},
+\end{equation}
+as well as the thermal expansion coefficient
+\begin{equation}
+    \frac{\partial \log \rho}{\partial \log T}\bigg|_{P,Y,Z} \approx \frac{\log\rho(\log T + \delta) - \log\rho(\log T - \delta)}{2\,\delta}.
+\end{equation}
+
+\subsection{Chemical Potential and Energy Derivatives}
+
+Thermodynamic consistency of the EOS can be verified via the fundamental relation.
+In the $(s,\rho)$ basis:
+\begin{equation}
+    \left(\frac{\partial u}{\partial s}\right)_{\!\rho,Y} = T, \qquad
+    -\left(\frac{\partial u}{\partial v}\right)_{\!s,Y} = P,
+\end{equation}
+where $v = 1/\rho$ is the specific volume.
+The chemical potential differences are obtained from
+\begin{equation}
+    \left(\frac{\partial u}{\partial Y}\right)_{\!s,\rho,Z}, \qquad
+    \left(\frac{\partial u}{\partial Z}\right)_{\!s,\rho,Y},
+\end{equation}
+each computed by centered finite differences.
+
+%============================================================
+\section{EOS Smoothing}\label{sec:smoothing}
+%============================================================
+
+The raw CMS19 and CD21 hydrogen--helium tables contain numerical artifacts from the bicubic spline interpolation used to stitch together the SCvH, QMD, and CP98 regimes.
+These artifacts manifest as discontinuities in entropy and density gradients, particularly at the SCvH$\to$QMD boundary ($\rho \approx 0.05\;\mathrm{g\;cm^{-3}}$) and near the H$_2$ melting curve.
+Similar artifacts exist in the water, methane, ammonia, and forsterite EOS tables near phase boundaries.
+
+\subsection{Five-Step H--He Smoothing Pipeline}
+
+For the H and He tables, we apply a five-step pipeline before constructing the interpolators:
+\begin{enumerate}
+    \item \textbf{Outlier isotherm replacement:} Isotherms with anomalously large deviations from their neighbors are identified and replaced by linear interpolation.
+    \item \textbf{Low-pressure extrapolation:} Invalid cells at low pressures (below the solid/liquid boundary) are detected via interior gradient comparison and replaced by linear extrapolation from valid neighbors.
+    \item \textbf{Low-pressure 2D Gaussian smoothing:} A 2D Gaussian filter is applied in the low-pressure region, blended with the original data via a tanh mask.
+    \item \textbf{High-pressure extrapolation:} Invalid cells at high pressures (above the quantum correction limit) are similarly detected and extrapolated.
+    \item \textbf{Targeted Gaussian smoothing:} A 2D Gaussian filter targets the dissociation/ionization zone using a gradient-adaptive mask.
+\end{enumerate}
+Each step operates on all three grids ($\log\rho$, $\log s$, $\log u$) simultaneously and is controlled by the \texttt{smooth\_hhe} flag in the constructor.
+
+\subsection{Heavy-Element EOS Smoothing}
+
+\subsubsection{AQUA Water EOS}
+The AQUA water table exhibits discontinuities at low pressures and temperatures from the ice--vapor phase boundary.
+A localized 2D Gaussian filter ($\sigma = 3$ grid points) is blended via a tanh mask concentrated in the low-$P$/low-$T$ corner:
+\begin{equation}
+    w_P = \tfrac{1}{2}\bigl[1 - \tanh\bigl((\log P - 8)/1.5\bigr)\bigr], \quad
+    w_T = \tfrac{1}{2}\bigl[1 - \tanh\bigl((\log T - 3)/0.3\bigr)\bigr],
+\end{equation}
+with the combined mask $w = w_P \cdot w_T$ applied to blend the smoothed and original grids.
+
+\subsubsection{CH$_4$ and NH$_3$ EOS}
+The methane and ammonia tables exhibit negative or NaN entropy values at high pressures and low temperatures.
+The smoothing procedure first interpolates invalid values from valid neighbors along each isotherm, then applies a targeted 2D Gaussian ($\sigma_T = 2$, $\sigma_P = 3$ grid points) blended via a tanh mask tuned to the discontinuity region.
+
+\subsubsection{Mg$_2$SiO$_4$ (Forsterite) ANEOS}
+The ANEOS forsterite table contains phase-transition discontinuities.
+A gradient-adaptive approach detects discontinuities via the relative gradient magnitude, then applies a Gaussian filter selectively in those regions, combined with a low-pressure mask.
+
+%============================================================
+\section{Multi-Species Z EOS}\label{sec:zeos}
+%============================================================
+
+The \texttt{z\_eos} class loads heavy-element EOS tables directly from raw data files, supporting four species:
+\begin{itemize}
+    \item \textbf{Water} (AQUA): $P$--$T$ and $\rho$--$T$ bases, SI units converted to CGS.
+    \item \textbf{Methane} (CH$_4$): $P$--$T$ basis, already in CGS.
+    \item \textbf{Ammonia} (NH$_3$): $P$--$T$ basis, already in CGS.
+    \item \textbf{Forsterite} (Mg$_2$SiO$_4$): ANEOS $P$--$T$ basis, $P$ in GPa converted to dyn/cm$^2$.
+\end{itemize}
+Each instance builds its own \texttt{RegularGridInterpolator} objects, allowing multiple independent \texttt{z\_eos} instances to coexist for metal-mixture calculations.
+The axis ordering differs by species: water and forsterite use $(\log P, \log T)$, while CH$_4$ and NH$_3$ use $(\log T, \log P)$, handled transparently by an internal dispatch method.
+
+%============================================================
+\section{$P$--$T$ Dependent Hydrogen Molecular Weight}\label{sec:mu_h}
+%============================================================
+
+The CMS19 hydrogen EOS transitions from molecular H$_2$ ($\mu_{\rm H} = 2$) at low temperatures to atomic/ionized H ($\mu_{\rm H} = 1$) at high temperatures.
+This transition affects the ideal entropy of mixing through the number fractions $x_i = f_i/\mu_i / \sum_j f_j/\mu_j$.
+
+We determine the dissociation boundary empirically from the CMS19 table by locating the peak of the isobaric heat capacity $C_P$ along each isobar.
+In the low-pressure regime ($\log P_{\rm cgs} \leq 10.5$), the dissociation peak is cleanly separated from the ionization peak, yielding the linear fit:
+\begin{equation}\label{eq:dissoc}
+    \log T_{\rm dissoc} = 2.966 + 0.097 \, \log P_{\rm cgs},
+\end{equation}
+with a maximum residual of 0.06\;dex over the fit range.
+Below this boundary, $\mu_{\rm H} = 2$ (molecular H$_2$); above it, $\mu_{\rm H} = 1$ (atomic or ionized H).
+The ionized species H$^+$ also uses $\mu_{\rm H} = 1$ since we count hydrogen atoms (not free electrons) as mixing particles.
+
+When the \texttt{mu\_h\_vary} flag is enabled (default), the entropy of mixing is computed with the $P$--$T$ dependent $\mu_{\rm H}$.
+Setting \texttt{mu\_h\_vary=False} recovers the legacy behavior ($\mu_{\rm H} = 1$ everywhere).
+
+%============================================================
+\section{Rhomboid-Adaptive Inversion Tables}\label{sec:rhomboid}
+%============================================================
+
+\subsection{The Rhomboid Problem}\label{sec:rhomboid_problem}
+
+When inverting from the $P$--$T$ basis to alternative coordinate systems, the physical domain in the target coordinates is generally non-rectangular.
+For example, in $(s, P)$ space, the entropy range at each pressure spans from $s_{\rm lo}(P) = s(P, T_{\rm max})$ to $s_{\rm hi}(P) = s(P, T_{\rm min})$, which varies by an order of magnitude across the pressure range.
+A fixed rectangular $s$ grid wastes significant storage on unphysical cells (only $\sim$31\% valid for $(\rho, P)$ tables) and risks storing garbage values from failed inversions.
+
+\subsection{Normalized Entropy Coordinate $\xi$}\label{sec:xi}
+
+We address this by introducing a normalized coordinate $\xi \in [0, 1]$ that maps the physical domain onto a rectangle.
+At each point along the non-varying axis (e.g., $\log P$ for S--P tables), the bounds of the varying axis are computed from the temperature boundaries of the $P$--$T$ table:
+\begin{equation}\label{eq:xi}
+    \xi = \frac{s - s_{\rm lo}(P, Y', Z)}{s_{\rm hi}(P, Y', Z) - s_{\rm lo}(P, Y', Z)},
+\end{equation}
+where $s_{\rm lo}$ and $s_{\rm hi}$ are stored as 3D arrays over $(\log P, Y', Z)$ and interpolated at query time.
+
+The table is then built on a rectangular grid in $(\xi, \log P, Y', Z)$, and the \texttt{RegularGridInterpolator} operates on these rectangular axes.
+To query the table with a physical entropy $s$, the caller converts $s \to \xi$ using the interpolated bounds, queries the RGI, and obtains $\log T(\xi, \log P, Y', Z)$.
+
+\subsection{Application to Each Basis}\label{sec:xi_basis}
+
+The $\xi$-mapping is applied to four inversion bases:
+
+\begin{enumerate}
+    \item \textbf{$S$--$P$ tables:} $\xi$ normalizes entropy at each $(\log P, Y', Z)$.
+    Bounds: $s_{\rm lo}(P) = s(P, T_{\rm max})$, $s_{\rm hi}(P) = s(P, T_{\rm min})$.
+    Stored: $\log T(\xi, \log P, Y', Z)$ in float32.
+
+    \item \textbf{$\rho$--$T$ tables:} $\xi$ normalizes $\log\rho$ at each $(\log T, Y', Z)$.
+    Bounds: $\rho_{\rm lo}(T) = \rho(P_{\rm min}, T)$, $\rho_{\rm hi}(T) = \rho(P_{\rm max}, T)$.
+    Stored: $\log P(\xi, \log T, Y', Z)$.
+
+    \item \textbf{$\rho$--$P$ tables:} $\xi$ normalizes $\log\rho$ at each $(\log P, Y', Z)$.
+    Bounds: $\rho_{\rm lo}(P) = \rho(P, T_{\rm max})$, $\rho_{\rm hi}(P) = \rho(P, T_{\rm min})$.
+    Stored: $\log T(\xi, \log P, Y', Z)$.
+
+    \item \textbf{$S$--$\rho$ tables:} $\xi$ normalizes entropy at each $(\log\rho, Y', Z)$.
+    Bounds computed by sweeping $T$ at each $\rho$ (via 1D $\rho$-inversion for $P$).
+    Stored: $\log P(\xi, \log\rho, Y', Z)$ and $\log T(\xi, \log\rho, Y', Z)$.
+    The 2D inversion uses bounded least-squares (Trust Region Reflective method).
+\end{enumerate}
+
+The bounds are per-$(Y', Z)$, not a global envelope, because the entropy and density ranges vary significantly with composition (e.g., $s_{\rm hi}$ at fixed $P$ varies by a factor of 4 between $Z=0$ and $Z=1$).
+
+\subsection{NaN Repair and Memory Optimization}
+
+After the root-finding loop, any remaining NaN cells (from convergence failures at the physical-domain boundary) are filled by a three-pass interpolation strategy:
+\begin{enumerate}
+    \item Along the $\xi$ axis (the most physical direction),
+    \item Along the second coordinate axis ($\log P$, $\log T$, or $\log\rho$),
+    \item Nearest-neighbor extrapolation for remaining edge cells.
+\end{enumerate}
+This guarantees zero NaNs in the final table.
+
+All tables are stored in \texttt{float32} to halve memory.
+For the S--P, $\rho$--T, and $\rho$--P tables, only the primary dependent variable ($\log T$ or $\log P$) is stored; all other quantities ($\log\rho$, $s$, $u$) are derived on-the-fly from the forward model at $(P, T)$.
+
+\subsection{Warm-Start Solver Strategy}
+
+During table generation, the solver uses a continuation strategy to accelerate convergence:
+\begin{itemize}
+    \item At the start of each new $Y'$ value, the guess cache is reset.
+    \item For the first $Z$ step, Brent's method (guaranteed convergence with bracket $[\log T_{\rm min}, \log T_{\rm max}]$) establishes initial solutions.
+    \item For subsequent $Z$ steps ($\Delta Z = 0.02$), Newton's method is warm-started from the previous $Z$ solution.  Since the composition perturbation is small, Newton typically converges in 2--4 iterations.
+    \item If Newton fails or wanders outside the valid range, the solver falls back to Brent's method.
+\end{itemize}
+
+%============================================================
+\section{P--T Basis Thermodynamic Identities}\label{sec:pt_derivs}
+%============================================================
+
+A key advance in the new framework is that \emph{all thermodynamic derivatives} are computed purely from $P$--$T$ basis quantities, avoiding the need for pre-computed inverted tables.
+This is achieved through standard thermodynamic identities and the triple product rule.
+
+\subsection{Base Quantities}\label{sec:base_derivs}
+
+We define four dimensionless log-log derivatives, each evaluated by centered finite differences on the forward model at a given $(\log P, \log T, Y', Z)$:
+\begin{align}
+    a &\equiv \frac{\partial \log s}{\partial \log T}\bigg|_{P} = \frac{\log s(P, T{+}\delta T) - \log s(P, T{-}\delta T)}{2\,\delta\log T}, \label{eq:a} \\[4pt]
+    b &\equiv \frac{\partial \log s}{\partial \log P}\bigg|_{T} = \frac{\log s(P{+}\delta P, T) - \log s(P{-}\delta P, T)}{2\,\delta\log P}, \label{eq:b} \\[4pt]
+    c &\equiv \frac{\partial \log\rho}{\partial \log T}\bigg|_{P} = \frac{\log\rho(P, T{+}\delta T) - \log\rho(P, T{-}\delta T)}{2\,\delta\log T}, \label{eq:c} \\[4pt]
+    d &\equiv \frac{\partial \log\rho}{\partial \log P}\bigg|_{T} = \frac{\log\rho(P{+}\delta P, T) - \log\rho(P{-}\delta P, T)}{2\,\delta\log P}, \label{eq:d}
+\end{align}
+with default step sizes $\delta\log T = \delta\log P = 10^{-2}$.
+
+The composition derivatives (at constant $P, T$) are:
+\begin{equation}
+    S_Y \equiv \frac{\partial s}{\partial Y'}\bigg|_{P,T,Z}, \quad
+    S_Z \equiv \frac{\partial s}{\partial Z}\bigg|_{P,T,Y'}, \quad
+    \rho_Y \equiv \frac{\partial \log\rho}{\partial Y'}\bigg|_{P,T,Z}, \quad
+    \rho_Z \equiv \frac{\partial \log\rho}{\partial Z}\bigg|_{P,T,Y'},
+\end{equation}
+each evaluated by centered finite differences with adaptive step sizing near the composition boundaries $[0, 1]$.
+
+\subsection{Constrained Partial Derivative Identity}\label{sec:constrained_pde}
+
+A recurring identity in the following derivations is the \emph{constrained partial derivative expansion}.
+Suppose $f = f(x, y)$ and we wish to evaluate $(\partial f/\partial x)_g$ where $g = g(x, y)$ is held constant.
+Along a path of constant $g$, $y$ is implicitly a function of $x$ via $g(x, y(x)) = \text{const}$, so
+\begin{equation}\label{eq:constrained_pd}
+    \left(\frac{\partial f}{\partial x}\right)_{\!g}
+    = \left(\frac{\partial f}{\partial x}\right)_{\!y}
+    + \left(\frac{\partial f}{\partial y}\right)_{\!x}
+    \cdot \left(\frac{\partial y}{\partial x}\right)_{\!g},
+\end{equation}
+where the last factor follows from the triple product rule on $g(x,y)$:
+\begin{equation}
+    \left(\frac{\partial y}{\partial x}\right)_{\!g} = -\frac{(\partial g/\partial x)_y}{(\partial g/\partial y)_x}.
+\end{equation}
+This identity is used to derive $C_V$, the Ledoux stability derivatives, and the constrained composition derivatives below.
+
+\subsection{Heat Capacities}\label{sec:heat_cap_id}
+
+The isobaric heat capacity is
+\begin{equation}\label{eq:cp_identity}
+    C_P \equiv T\left(\frac{\partial s}{\partial T}\right)_{\!P} = \frac{\partial s}{\partial \ln T}\bigg|_P = s \cdot a.
+\end{equation}
+For the isochoric heat capacity $C_V = T(\partial s/\partial T)_\rho$, we apply equation~(\ref{eq:constrained_pd}) with $f = s$, $x = T$, $y = P$, and $g = \rho$:
+\begin{equation}
+    \left(\frac{\partial s}{\partial T}\right)_{\!\rho}
+    = \left(\frac{\partial s}{\partial T}\right)_{\!P}
+    + \left(\frac{\partial s}{\partial P}\right)_{\!T}
+    \cdot \left(\frac{\partial P}{\partial T}\right)_{\!\rho}.
+\end{equation}
+The triple product rule on $\rho(P,T)$ gives
+\begin{equation}
+    \left(\frac{\partial P}{\partial T}\right)_\rho = -\frac{(\partial\rho/\partial T)_P}{(\partial\rho/\partial P)_T},
+\end{equation}
+which in log-derivative notation is $(\partial\log P/\partial\log T)_\rho = -c/d$.
+Substituting:
+\begin{equation}\label{eq:cv_identity}
+    C_V = s \left(a - \frac{b\,c}{d}\right).
+\end{equation}
+
+\subsection{Adiabatic Gradient and First Adiabatic Index}
+
+From the triple product rule on $s(P, T)$:
+\begin{equation}\label{eq:nabla_ad_identity}
+    \nabla_{\rm ad} \equiv \frac{\partial\log T}{\partial\log P}\bigg|_s = -\frac{b}{a}.
+\end{equation}
+The first adiabatic index follows from the chain rule for $(\partial P/\partial\rho)_s$:
+\begin{equation}\label{eq:gamma1_identity}
+    \Gamma_1 \equiv \frac{\partial\log P}{\partial\log\rho}\bigg|_s = \frac{1}{d - c\,b/a},
+\end{equation}
+which satisfies the identity $\Gamma_1 = \chi_\rho \cdot C_P / C_V$.
+
+\subsection{Susceptibility Coefficients}
+
+The coefficients $\chi_T$, $\chi_\rho$, $\chi_Y$, and $\chi_Z$ are obtained directly from the base quantities:
+\begin{equation}\label{eq:chi_identity}
+    \chi_T = -\frac{c}{d}, \quad
+    \chi_\rho = \frac{1}{d}, \quad
+    \chi_Y = -\frac{\rho_Y}{d}, \quad
+    \chi_Z = -\frac{\rho_Z}{d}.
+\end{equation}
+The thermal expansion parameter is $\delta = -c$.
+
+\subsection{Ledoux Stability Derivatives}\label{sec:ledoux_id}
+
+The Ledoux criterion requires entropy derivatives at constant $(\rho, P)$, which constrain the temperature to adjust when composition changes.
+At constant $P$ and $\rho$, a change $dY'$ induces a temperature change
+\begin{equation}
+    \frac{dT}{dY'}\bigg|_{\rho,P} = -\frac{(\partial\rho/\partial Y')_{P,T}}{(\partial\rho/\partial T)_P} = -T\,\ln 10\, \frac{\rho_Y}{c},
+\end{equation}
+where the factor of $\ln 10$ arises because $\rho_Y \equiv \partial(\log_{10}\rho)/\partial Y'$ is a log$_{10}$ derivative while $c$ is a log--log derivative (the $\ln 10$ in $\partial\rho/\partial Y' = \rho\,\ln 10\,\rho_Y$ does not cancel against $\partial\rho/\partial T = \rho\,c/T$ since $c$ is already dimensionless).
+The Ledoux entropy derivative is then:
+\begin{equation}\label{eq:ledoux_y}
+    \frac{\partial s}{\partial Y'}\bigg|_{\rho,P,Z} = S_Y - s\,a\,\ln 10\,\frac{\rho_Y}{c},
+\end{equation}
+and analogously for $Z$:
+\begin{equation}\label{eq:ledoux_z}
+    \frac{\partial s}{\partial Z}\bigg|_{\rho,P,Y'} = S_Z - s\,a\,\ln 10\,\frac{\rho_Z}{c}.
+\end{equation}
+
+\subsection{Constrained Composition Derivatives}\label{sec:constrained}
+
+The temperature and pressure responses to composition changes at constant $(s, \rho)$ are obtained from the implicit function theorem.
+The two constraints $s(P, T, Y') = \text{const}$ and $\rho(P, T, Y') = \text{const}$ define a 2$\times$2 linear system in the actual (non-log) derivatives:
+\begin{equation}
+    \begin{pmatrix} s\,b/P & s\,a/T \\ \rho\,d/P & \rho\,c/T \end{pmatrix}
+    \begin{pmatrix} dP \\ dT \end{pmatrix}
+    = -\begin{pmatrix} S_Y \\ \rho\,\ln 10\,\rho_Y \end{pmatrix} dY',
+\end{equation}
+where the right-hand side uses $\partial\rho/\partial Y' = \rho\,\ln 10\,\rho_Y$ (since $\rho_Y$ is in $\log_{10}$).
+Solving by Cramer's rule:
+\begin{align}
+    \frac{dT}{dY'}\bigg|_{s,\rho} &= \frac{T\,(d\,S_Y - s\,b\,\ln 10\,\rho_Y)}{s\,(b\,c - a\,d)}, \label{eq:dTdY_srho} \\[4pt]
+    \frac{dP}{dY'}\bigg|_{s,\rho} &= \frac{P\,(s\,a\,\ln 10\,\rho_Y - c\,S_Y)}{s\,(b\,c - a\,d)}. \label{eq:dPdY_srho}
+\end{align}
+The chemical potential derivatives follow from the chain rule:
+\begin{equation}\label{eq:dUdY_srho}
+    \frac{\partial u}{\partial Y'}\bigg|_{s,\rho} = U_P \cdot \frac{d\log P}{dY'}\bigg|_{s,\rho} + U_T \cdot \frac{d\log T}{dY'}\bigg|_{s,\rho} + U_Y,
+\end{equation}
+where $U_P = (\partial u/\partial\log P)_T$, $U_T = (\partial u/\partial\log T)_P$, $U_Y = (\partial u/\partial Y')_{P,T}$, and
+$d\log P/dY' = (dP/dY')/(P\,\ln 10)$, $d\log T/dY' = (dT/dY')/(T\,\ln 10)$.
+Analogous expressions hold with $Z$ replacing $Y'$.
+
+\subsection{Smoothed Derivatives}\label{sec:savgol}
+
+The residual kinks in the CMS19/CD21 tables (particularly at the SCvH$\to$QMD stitching boundary) can produce noisy finite differences.
+To mitigate this, we optionally replace the 2-point central difference with a 5-point Savitzky--Golay derivative filter.
+
+For a derivative $df/dx$ at point $x_0$, we evaluate $f$ on a 5-point stencil $\{x_0 - 2h, x_0 - h, x_0, x_0 + h, x_0 + 2h\}$ and compute
+\begin{equation}\label{eq:savgol}
+    \frac{df}{dx}\bigg|_{x_0} = \frac{-2f_{-2} - f_{-1} + f_1 + 2f_2}{10\,h},
+\end{equation}
+which is the first-derivative coefficient of a degree-2 polynomial fit to the five points (equivalent to a weighted moving average of slopes).
+This has the same formal order of accuracy as the 2-point central difference but suppresses high-frequency noise.
+
+\subsection{Summary of Derivative Methods}
+
+Table~\ref{tab:derivatives} summarizes all 18 thermodynamic derivatives, their finite-difference basis, the inversion required, and their physical role.
+
+\input{table_derivatives}
+
+%============================================================
+\section{Thermodynamic Consistency Verification}\label{sec:thermo_consistency}
+%============================================================
+
+Because the CMS19/CD21 hydrogen--helium tables and the AQUA water table are constructed from independent ab~initio calculations, the three independently tabulated quantities---specific entropy $s(P,T)$, density $\rho(P,T)$, and specific internal energy $u(P,T)$---are not guaranteed to satisfy the first law of thermodynamics exactly.
+We quantify these inconsistencies with three tests derived from the fundamental relation $du = T\,ds - P\,dV$, where $V = 1/\rho$ is the specific volume.
+
+\subsection{Derivation of Consistency Relations}
+
+The first law of thermodynamics for a single-component fluid is
+\begin{equation}\label{eq:first_law}
+    du = T\,ds - P\,dV = T\,ds + \frac{P}{\rho^2}\,d\rho\,,
+\end{equation}
+where the second equality uses $dV = d(1/\rho) = -\rho^{-2}\,d\rho$.
+
+\paragraph{Test A: First law at constant pressure.}
+Restricting Equation~\eqref{eq:first_law} to constant $P$:
+\begin{equation}\label{eq:first_law_constP}
+    \left.\frac{\partial u}{\partial T}\right|_P
+    = T \left.\frac{\partial s}{\partial T}\right|_P
+    + \frac{P}{\rho^2} \left.\frac{\partial \rho}{\partial T}\right|_P \,.
+\end{equation}
+We convert to derivatives with respect to $\log_{10} T$ by multiplying both sides by $dT/d\!\log_{10}\!T = T \ln 10$:
+\begin{equation}\label{eq:test_A}
+    \boxed{
+    \left.\frac{\partial u}{\partial \log T}\right|_P
+    = T \left.\frac{\partial s}{\partial \log T}\right|_P
+    + \frac{P}{\rho^2} \left.\frac{\partial \rho}{\partial \log T}\right|_P
+    }
+\end{equation}
+where all derivatives are of the \emph{linear} (not logarithmic) quantities $s$, $\rho$, $u$ with respect to $\log_{10} T$ at constant $\log_{10} P$.
+
+\paragraph{Test B: First law at constant temperature.}
+The analogous relation at constant $T$, with derivatives in $\log_{10} P$:
+\begin{equation}\label{eq:test_B}
+    \boxed{
+    \left.\frac{\partial u}{\partial \log P}\right|_T
+    = T \left.\frac{\partial s}{\partial \log P}\right|_T
+    + \frac{P}{\rho^2} \left.\frac{\partial \rho}{\partial \log P}\right|_T
+    }
+\end{equation}
+
+\paragraph{Test C: Maxwell relation from the Gibbs free energy.}
+The Gibbs free energy satisfies $dG = V\,dP - s\,dT$, so the equality of cross-derivatives gives
+\begin{equation}
+    \left.\frac{\partial V}{\partial T}\right|_P
+    = -\left.\frac{\partial s}{\partial P}\right|_T \,.
+\end{equation}
+Substituting $V = 1/\rho$ so that $(\partial V/\partial T)|_P = -\rho^{-2}(\partial\rho/\partial T)|_P$, and converting to $\log_{10}$ derivatives (multiply both sides by $TP\ln 10$):
+\begin{equation}\label{eq:test_C}
+    \boxed{
+    \frac{P}{\rho^2} \left.\frac{\partial \rho}{\partial \log T}\right|_P
+    = T \left.\frac{\partial s}{\partial \log P}\right|_T
+    }
+\end{equation}
+
+\subsection{Numerical Implementation}
+
+All derivatives are evaluated via centered finite differences with step $h = 0.01$~dex in $\log_{10}$ space:
+\begin{equation}
+    \left.\frac{\partial f}{\partial \log T}\right|_P
+    \approx \frac{f(\log P,\, \log T + h) - f(\log P,\, \log T - h)}{2h}\,,
+\end{equation}
+where $f$ is $s$, $\rho$, or $u$ in \emph{linear} units (erg\,g$^{-1}$\,K$^{-1}$, g\,cm$^{-3}$, erg\,g$^{-1}$, respectively).
+The step size $h = 0.01$ corresponds to a $\sim\!2.3\%$ change in the physical variable and matches the finite-difference convention used in the derivative routines of Section~\ref{sec:derivatives}.
+
+For each test, we define the left-hand side (LHS) and right-hand side (RHS) of the boxed equations above, and compute a symmetric fractional error:
+\begin{equation}\label{eq:frac_error}
+    \varepsilon = \frac{|\text{LHS} - \text{RHS}|}
+    {\tfrac{1}{2}(|\text{LHS}| + |\text{RHS}|) + \epsilon}\,,
+\end{equation}
+where $\epsilon = 10^{-30}$ prevents division by zero.
+
+Tests are evaluated on a uniform grid in $(\log P,\, \log T)$ spanning $\log P \in [6, 14]$ (dyn\,cm$^{-2}$) with step 0.05~dex, and $\log T \in [2.5, 5.5]$ (K) with step 0.025~dex, yielding $161 \times 121 = 19{,}481$ test points per composition.
+Grid points where any of the six stencil evaluations (center $\pm\, h$ in both $\log T$ and $\log P$) return NaN are excluded.
+
+\subsection{Results}
+
+We evaluate the three consistency tests for H--He mixtures at $Y' = 0.275$ and $Z = 0$ using both the CMS19 and CD21 hydrogen tables, with no smoothing applied to the raw tables.  We also test H--He--water (AQUA) mixtures at $Z = 0.017$ and $Z = 0.051$ to assess the impact of the volume addition law mixing with heavy elements.
+
+For the pure H--He case (CD21, $Y' = 0.275$, $Z = 0$), the median fractional errors are:
+\begin{itemize}
+    \item Test A (first law, const $P$): $\tilde{\varepsilon} \approx 1.0\%$, $\varepsilon_{95} \approx 25\%$
+    \item Test B (first law, const $T$): $\tilde{\varepsilon} \approx 2.5\%$, $\varepsilon_{95} \approx 146\%$
+    \item Test C (Maxwell relation): $\tilde{\varepsilon} \approx 1.1\%$, $\varepsilon_{95} \approx 46\%$
+\end{itemize}
+The largest violations are concentrated along the H$_2$ dissociation boundary ($\log T \approx 2.97 + 0.097 \log P_{\rm cgs}$), at table grid-node kinks (notably $\log T = 5.0$, where the bilinear interpolation preserves a slope discontinuity in the underlying table), and at the high-pressure domain edges where the tables run out of valid data.
+
+Adding metals via the volume addition law slightly degrades the constant-$T$ test (Test~B) because the independently tabulated AQUA water energy introduces additional inconsistency along the pressure axis, while the constant-$P$ test (Test~A) and Maxwell relation (Test~C) remain largely unchanged.
+
+%============================================================
+\section{Ideal Gas Equation of State}\label{sec:ideal_eos}
+%============================================================
+
+The ideal gas EOS provides analytic thermodynamic functions for use as initial guesses in the numerical inversions described in \S\ref{sec:inversion}, and as a reference limit for validating the non-ideal tables.
+Two classes are implemented: a monatomic ideal gas based on the Sackur--Tetrode equation (\texttt{IdealEOS}), and a molecular extension that includes rotational and vibrational degrees of freedom (\texttt{MolecularIdealEOS}).
+
+\subsection{Monatomic Ideal Gas (Sackur--Tetrode)}\label{sec:sackur_tetrode}
+
+For a monatomic ideal gas of molecular weight $\mu$ (in atomic mass units), the translational entropy per unit mass is derived from the Sackur--Tetrode equation.  In the $(P,T)$ basis, the entropy per particle in units of $k_B$ is
+\begin{equation}\label{eq:sackur_tetrode}
+    \frac{s_{\rm trans}^{(p)}}{k_B} = C_0^{(PT)} + \tfrac{5}{2}\ln T - \ln P + \tfrac{3}{2}\ln\mu,
+\end{equation}
+where $T$ is in kelvin, $P$ in $\mathrm{dyn\;cm^{-2}}$, $\mu$ is the dimensionless molecular weight, and
+\begin{equation}\label{eq:c0pt}
+    C_0^{(PT)} = \tfrac{5}{2} + \tfrac{5}{2}\ln k_B + \tfrac{3}{2}\ln(2\pi) + \tfrac{3}{2}\ln m_u - 3\ln h,
+\end{equation}
+with $k_B = 1.380649\times10^{-16}\;\mathrm{erg\;K^{-1}}$ (Boltzmann constant), $m_u = 1.66054\times10^{-24}\;\mathrm{g}$ (atomic mass unit), and $h = 6.62607\times10^{-27}\;\mathrm{erg\;s}$ (Planck constant; all exact in the 2019 SI).
+The specific entropy in $\mathrm{erg\;g^{-1}\;K^{-1}}$ is then
+\begin{equation}
+    s_{\rm trans} = \frac{s_{\rm trans}^{(p)}}{\mu\, m_u / k_B}.
+\end{equation}
+
+Equivalent expressions in the $(\rho,T)$ and $(\rho,P)$ bases are obtained by substituting the ideal gas law $P = \rho\, k_B\, T / (\mu\, m_u)$:
+\begin{align}
+    \frac{s_{\rm trans}^{(p)}}{k_B}\bigg|_{\rho T} &= C_0^{(\rho T)} + \tfrac{3}{2}\ln T - \ln\rho + \tfrac{5}{2}\ln\mu, \label{eq:s_rhot} \\
+    \frac{s_{\rm trans}^{(p)}}{k_B}\bigg|_{\rho P} &= C_0^{(\rho P)} + \tfrac{3}{2}\ln P + 4\ln\mu - \tfrac{5}{2}\ln\rho, \label{eq:s_rhop}
+\end{align}
+where $C_0^{(\rho T)} = C_0^{(PT)} + \ln m_u - \ln k_B$ and $C_0^{(\rho P)} = C_0^{(PT)} + \tfrac{5}{2}\ln m_u - \tfrac{5}{2}\ln k_B$.
+The three constants are derived from a single base constant $C_0^{(PT)}$ via the ideal gas law, which guarantees mutual thermodynamic consistency.
+
+The remaining thermodynamic quantities follow from standard ideal gas relations:
+\begin{align}
+    \rho &= P\,\mu\,m_u / (k_B T), \\
+    u &= \tfrac{3}{2}\,(k_B / m_u)\, T / \mu, \\
+    c_v &= \tfrac{3}{2}\, R_{\rm id} / \mu, \qquad c_p = \tfrac{5}{2}\, R_{\rm id} / \mu, \\
+    \nabla_{\rm ad} &\equiv \frac{\partial \ln T}{\partial \ln P}\bigg|_s = \frac{\gamma-1}{\gamma} = \frac{2}{5},
+\end{align}
+where $R_{\rm id} \equiv k_B / m_u \approx 8.314\times10^{7}\;\mathrm{erg\;g^{-1}\;K^{-1}}$ is the gas constant per gram of unit-molecular-weight gas, and $\gamma = c_p/c_v = 5/3$.
+
+The analytic inversions $T(s,P)$, $T(s,\rho)$, $P(s,\rho)$, and $\rho(s,P)$ are obtained by algebraic rearrangement of Equations~\eqref{eq:sackur_tetrode}--\eqref{eq:s_rhop}.
+All inversions accept entropy in units of $k_B$ per baryon ($k_B / m_u$), consistent with the convention used by the non-ideal EOS modules.
+
+\subsection{Molecular Ideal Gas: Rotational and Vibrational Contributions}\label{sec:molecular_eos}
+
+For molecular species, the partition function factorizes as $q = q_{\rm trans}\, q_{\rm rot}\, q_{\rm vib}$, so the thermodynamic potentials are additive:
+\begin{equation}
+    s = s_{\rm trans} + s_{\rm rot} + s_{\rm vib}, \qquad u = u_{\rm trans} + u_{\rm rot} + u_{\rm vib}.
+\end{equation}
+We implement this as a subclass \texttt{MolecularIdealEOS} that inherits the translational (Sackur--Tetrode) contributions from \texttt{IdealEOS} and adds rotational and vibrational terms.
+The ideal gas law relating $P$, $\rho$, and $T$ is unchanged by internal degrees of freedom.
+
+\subsubsection{Rotational Contributions (Classical Limit)}\label{sec:rot}
+
+In the classical high-temperature limit ($T \gg \Theta_{\rm rot}$), the rotational entropy per particle is
+\begin{equation}\label{eq:s_rot_lin}
+    \frac{s_{\rm rot}}{k_B} = \ln\frac{T}{\sigma\,\Theta_{\rm rot}} + 1 \qquad (\text{linear molecule}),
+\end{equation}
+\begin{equation}\label{eq:s_rot_nonlin}
+    \frac{s_{\rm rot}}{k_B} = \ln\left[\frac{\sqrt{\pi}}{\sigma}\left(\frac{T^3}{\Theta_A\,\Theta_B\,\Theta_C}\right)^{1/2}\right] + \frac{3}{2} \qquad (\text{nonlinear}),
+\end{equation}
+where $\sigma$ is the rotational symmetry number and $\Theta_{\rm rot}$, $\Theta_A$, $\Theta_B$, $\Theta_C$ are the characteristic rotational temperatures defined by $\Theta = hcB/k_B$ for rotational constant $B$.
+The corresponding heat capacities per particle are $c_{v,\rm rot} = k_B$ (linear; 2 rotational degrees of freedom) and $c_{v,\rm rot} = \frac{3}{2}k_B$ (nonlinear; 3 degrees of freedom).
+Monatomic species have zero rotational contribution.
+
+The classical limit is valid for all temperatures of interest in planetary interiors.
+For H$_2$, $\Theta_{\rm rot} = 87.6\;\mathrm{K}$ and the quantum regime only matters below $\sim 100\;\mathrm{K}$; for heavier molecules $\Theta_{\rm rot} \ll 1\;\mathrm{K}$.
+
+\subsubsection{Vibrational Contributions (Quantum Harmonic Oscillator)}\label{sec:vib}
+
+Each vibrational mode $i$ with characteristic temperature $\Theta_{v,i}$ contributes according to the quantum harmonic oscillator (Einstein model).
+Defining $x_i \equiv \Theta_{v,i}/T$, the per-particle contributions are
+\begin{align}
+    \frac{s_{{\rm vib},i}}{k_B} &= \frac{x_i}{e^{x_i}-1} - \ln\!\left(1 - e^{-x_i}\right), \label{eq:s_vib} \\
+    \frac{u_{{\rm vib},i}}{k_B} &= \frac{\Theta_{v,i}}{e^{x_i}-1}, \label{eq:u_vib} \\
+    \frac{c_{v,{\rm vib},i}}{k_B} &= \frac{x_i^2\, e^{x_i}}{(e^{x_i}-1)^2}. \label{eq:cv_vib}
+\end{align}
+A molecule with $N$ atoms has $3N-5$ vibrational modes (linear) or $3N-6$ modes (nonlinear).
+The total vibrational contribution is the sum over all modes.
+
+In the high-temperature limit ($T \gg \Theta_{v,i}$, i.e.\ $x_i \to 0$), each mode contributes $c_{v,{\rm vib},i} \to k_B$ per particle, recovering the classical equipartition value.
+In the low-temperature limit ($T \ll \Theta_{v,i}$, i.e.\ $x_i \to \infty$), the vibrational mode freezes out: $c_{v,{\rm vib},i} \to 0$.
+This temperature-dependent freeze-out means that the heat capacity and adiabatic gradient are no longer constant but vary with temperature:
+\begin{equation}\label{eq:grad_ad_mol}
+    \nabla_{\rm ad} = 1 - \frac{c_v}{c_p} = \frac{R_{\rm id}/\mu}{c_v + R_{\rm id}/\mu},
+\end{equation}
+where $c_v = c_{v,\rm trans} + c_{v,\rm rot} + c_{v,\rm vib}$ and $c_p = c_v + R_{\rm id}/\mu$ (the ideal gas relation $c_p - c_v = R/\mu$ holds regardless of internal degrees of freedom).
+
+\subsubsection{Characteristic Temperatures}\label{sec:theta}
+
+The characteristic temperatures are computed from spectroscopic constants tabulated in the NIST Computational Chemistry Comparison and Benchmark Database (CCCBDB).
+We use \emph{harmonic} vibrational frequencies $\omega_e$ rather than fundamental (anharmonic) frequencies $\nu_0$, since the harmonic oscillator partition function (Equations~\ref{eq:s_vib}--\ref{eq:cv_vib}) assumes equally spaced energy levels; pairing it with anharmonic frequencies would be internally inconsistent.
+The conversion is $\Theta_v = hc\,\omega_e / k_B$, with $hc/k_B = 1.4388\;\mathrm{cm\;K}$.
+
+Table~\ref{tab:species} lists the predefined molecular species and their spectroscopic parameters.
+
+\begin{deluxetable}{lccccc}
+\tablecaption{Molecular species and their spectroscopic parameters from the NIST CCCBDB.  Rotational constants $B$ (or $A$, $B$, $C$ for nonlinear molecules) and harmonic vibrational frequencies $\omega_e$ are converted to characteristic temperatures $\Theta$ via $\Theta = hc\,B/k_B$ and $\Theta_v = hc\,\omega_e/k_B$.\label{tab:species}}
+\tablehead{
+    \colhead{Species} & \colhead{$\mu$} & \colhead{Geometry} & \colhead{$\sigma$} & \colhead{$\Theta_{\rm rot}$ (K)} & \colhead{$\Theta_{v}$ (K)}
+}
+\startdata
+H$_2$    & 2.016  & linear    & 2 & 87.6              & 6332 \\
+He       & 4.003  & monatomic & -- & --                & -- \\
+H$_2$O   & 18.015 & nonlinear & 2 & 40.1, 20.9, 13.4 & 2373, 5514, 5674 \\
+Fe       & 55.845 & monatomic & -- & --                & -- \\
+MgSiO$_3$ & 100.39 & monatomic & -- & --               & -- \\
+\enddata
+\tablecomments{The H$_2$ rotational constant $B = 60.853\;\mathrm{cm^{-1}}$ and harmonic frequency $\omega_e = 4401\;\mathrm{cm^{-1}}$.  The H$_2$O rotational constants are $A = 27.877$, $B = 14.512$, $C = 9.285\;\mathrm{cm^{-1}}$; harmonic frequencies are $\omega_1 = 1649$, $\omega_2 = 3832$, $\omega_3 = 3943\;\mathrm{cm^{-1}}$.  Monatomic species (He, Fe, MgSiO$_3$) have no rotational or vibrational contributions and reduce identically to the Sackur--Tetrode result.}
+\end{deluxetable}
+
+\subsubsection{Inversions}\label{sec:mol_inversions}
+
+With vibrational contributions, the entropy $s(P,T)$ is no longer analytically invertible for $T$ because the Einstein function (Equation~\ref{eq:s_vib}) is transcendental in $T$.
+We solve for $T$ via Newton--Raphson iteration, using the monatomic Sackur--Tetrode analytic inversion as the initial guess.
+The Jacobian
+\begin{equation}
+    \frac{\partial s}{\partial \log T}\bigg|_P = \left(\tfrac{5}{2} + \tfrac{n_{\rm rot}}{2}\right) \frac{k_B}{\mu\, m_u}\,\ln 10 + c_{v,\rm vib}(T)\,\ln 10
+\end{equation}
+is available analytically, where $n_{\rm rot}$ is the number of rotational degrees of freedom (0, 2, or 3).
+For monatomic species the Newton loop performs zero iterations since the Sackur--Tetrode guess is exact, so there is no performance penalty.
+For molecular species, convergence to a fractional tolerance of $10^{-12}$ typically requires 2--5 iterations.
+
+The $T(s,\rho)$, $P(s,\rho)$, and $\rho(s,P)$ inversions are handled similarly: Newton iteration on $s(\rho,T)$ yields $T$, from which the remaining variable follows via the ideal gas law.
+
+\subsection{Ideal H--He Mixture}\label{sec:ideal_hhe}
+
+The \texttt{IdealHHeMix} class constructs a binary ideal gas mixture of hydrogen ($\mu_{\rm H} = 2.016$) and helium ($\mu_{\rm He} = 4.003$) using mass-fraction--weighted specific quantities:
+\begin{equation}
+    s_{\rm mix} = (1-Y')\,s_{\rm H}(P,T) + Y'\,s_{\rm He}(P,T) + s_{\rm mix,id},
+\end{equation}
+where $s_{\rm H}$ and $s_{\rm He}$ are the pure-species entropies (from \texttt{IdealEOS} by default) and $s_{\rm mix,id}$ is the ideal entropy of mixing (Equation~\ref{eq:smix_id_y}).
+The mixture density follows the volume addition law:
+\begin{equation}
+    \frac{1}{\rho_{\rm mix}} = \frac{1-Y'}{\rho_{\rm H}(P,T)} + \frac{Y'}{\rho_{\rm He}(P,T)}.
+\end{equation}
+Internal energy is mixed linearly: $u_{\rm mix} = (1-Y')\,u_{\rm H} + Y'\,u_{\rm He}$.
+
+The constructor accepts optional \texttt{eos\_h} and \texttt{eos\_he} arguments, allowing the hydrogen component to be replaced with a \texttt{MolecularIdealEOS} instance (e.g., molecular H$_2$ with rotational and vibrational modes) when a more physical ideal gas reference is desired.
+
+\subsection{Verification}\label{sec:ideal_verification}
+
+Both \texttt{IdealEOS} and \texttt{MolecularIdealEOS} are verified by a suite of self-consistency tests:
+
+\begin{enumerate}
+    \item \textbf{Entropy self-consistency:} $s(P,T) = s(\rho,T) = s(\rho,P)$ for thermodynamically consistent $(P,T,\rho)$ triples, verified to $\lesssim 10^{-15}$ fractional error.
+    \item \textbf{Round-trip inversions:} $T \to s(P,T) \to T(s,P)$ recovers the original $T$ to $\lesssim 10^{-10}$ in $\log_{10} T$; similarly for all other inversion paths.
+    \item \textbf{First law of thermodynamics:} At constant $P$, the centered finite-difference relation
+    $\partial u / \partial \log T |_P = T\,\partial s / \partial \log T |_P + (P/\rho^2)\,\partial\rho/\partial\log T |_P$
+    holds to $\lesssim 10^{-10}$ fractional error; similarly at constant $T$.
+    \item \textbf{Maxwell relation:} $(P/\rho^2)\,\partial\rho/\partial\log T|_P = T\,\partial s/\partial\log P|_T$, verified to $\lesssim 10^{-10}$.
+    \item \textbf{Classical equipartition limits:} At $T \gg \max(\Theta_{v,i})$, the heat capacity approaches the classical value---$c_v \to \frac{7}{2}\,R_{\rm id}/\mu$ for H$_2$ (3 translational + 2 rotational + 2 vibrational degrees of freedom) and $c_v \to 6\,R_{\rm id}/\mu$ for H$_2$O (3 + 3 + 6 degrees of freedom)---to better than 0.01\%.
+    \item \textbf{Vibrational freeze-out:} At $T \ll \min(\Theta_{v,i})$, the heat capacity reduces to the translational + rotational value: $c_v \to \frac{5}{2}\,R_{\rm id}/\mu$ for H$_2$ and $c_v \to 3\,R_{\rm id}/\mu$ for H$_2$O.
+    \item \textbf{NIST comparison:} The H$_2$ heat capacity at 300~K and 1~atm, $c_p = 29.1\;\mathrm{J\;mol^{-1}\;K^{-1}}$, agrees with the NIST tabulated value of $28.85\;\mathrm{J\;mol^{-1}\;K^{-1}}$ to $\lesssim 1\%$.  The residual difference is expected from the harmonic approximation.
+    \item \textbf{Adiabatic gradient:} $\nabla_{\rm ad}$ transitions smoothly from 2/7 (H$_2$, low $T$) to 2/9 (H$_2$, high $T$) as vibrational modes activate, matching the analytic prediction $\nabla_{\rm ad} = 2/(2 + f)$ where $f$ is the number of active quadratic degrees of freedom.
+\end{enumerate}
+
+%============================================================
+\section{Summary}\label{sec:summary}
+%============================================================
+
+We have described a comprehensive EOS framework for multi-component planetary mixtures.
+The key advances over previous implementations are:
+\begin{enumerate}
+    \item \textbf{Targeted smoothing} of the H--He, water, CH$_4$, NH$_3$, and Mg$_2$SiO$_4$ tables to remove numerical artifacts from phase-boundary stitching while preserving physical features.
+    \item \textbf{Multi-species metal mixing} via the volume addition law with independent \texttt{z\_eos} instances for water, methane, ammonia, and forsterite.
+    \item \textbf{$P$--$T$ dependent hydrogen molecular weight} $\mu_{\rm H}(P,T)$ for the ideal entropy of mixing, switching from $\mu_{\rm H} = 2$ (molecular H$_2$) to $\mu_{\rm H} = 1$ (atomic/ionized H) at the empirically determined dissociation boundary.
+    \item \textbf{Rhomboid-adaptive inversion tables} using a normalized coordinate $\xi \in [0,1]$ that maps the non-rectangular physical domain onto a rectangle suitable for \texttt{RegularGridInterpolator}.  This eliminates wasted storage on unphysical cells and avoids failed inversions at domain boundaries.
+    \item \textbf{All thermodynamic derivatives from the $P$--$T$ basis}, using thermodynamic identities rather than inverted tables.  This makes derivative computation fast, independent of table availability, and avoids compounding interpolation errors through multiple inversion stages.
+    \item \textbf{Savitzky--Golay smoothed finite differences} to suppress derivative noise from residual EOS table artifacts.
+    \item \textbf{Molecular ideal gas EOS} with rotational and vibrational degrees of freedom (quantum harmonic oscillator), using NIST harmonic frequencies, providing physically motivated initial guesses for root-finding inversions and a temperature-dependent adiabatic gradient.
+\end{enumerate}
+Numerical inversions via a hybrid Newton--Brentq algorithm (for 1D inversions) or bounded least-squares with Trust Region Reflective method (for 2D $s$--$\rho$ inversions) provide the EOS in the $(s,P)$, $(\rho,T)$, $(s,\rho)$, and $(\rho,P)$ bases required by structure and evolution codes, with warm-start continuation across the composition grid for efficiency.
+
+\begin{acknowledgments}
+This work makes use of the AQUA equation of state \citep{Haldemann2020}, the CMS19 \citep{Chabrier2019} and CD21 \citep{Chabrier2021} hydrogen--helium tables, and the non-ideal H--He mixing data of \citet{Howard2023a}.
+\end{acknowledgments}
+
+\bibliographystyle{aasjournalv7}
+\bibliography{references}
+
+\end{document}

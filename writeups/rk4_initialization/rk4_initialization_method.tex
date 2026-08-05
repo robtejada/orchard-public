@@ -1,0 +1,582 @@
+\documentclass{aastex631}
+
+\usepackage{amsmath,amssymb}
+\usepackage{natbib}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\pp}{\partial}
+\newcommand{\kbbar}{k_{\rm B}/\mathrm{amu}}
+\newcommand{\Mpl}{M_{\rm p}}
+\newcommand{\Mcore}{M_{\rm core}}
+\newcommand{\Mfe}{M_{\rm Fe}}
+\newcommand{\Menv}{M_{\rm env}}
+\newcommand{\Rpl}{R_{\rm p}}
+\newcommand{\Rcore}{R_{\rm core}}
+\newcommand{\Pc}{P_{\rm c}}
+\newcommand{\Patm}{P_{\rm atm}}
+\newcommand{\Psurf}{P_{\rm surf}}
+\newcommand{\Pcb}{P_{\rm cb}}
+\newcommand{\orchard}{\textsc{orchard}}
+
+\shorttitle{ORCHARD RK4 Initialization}
+\shortauthors{Tejada Arevalo}
+
+\begin{document}
+
+\title{RK4 Shooting Method for Initial Planetary Structure in
+  the ORCHARD Evolution Code}
+
+\author{Roberto Tejada Arevalo}
+
+\begin{abstract}
+We describe the fourth-order Runge--Kutta (RK4) shooting method used
+by the \orchard{} planetary evolution code to construct self-consistent
+initial hydrostatic structures at $t=0$.  The method integrates the
+equations of hydrostatic equilibrium and mass continuity from the
+planetary center to the surface on a fine internal mass grid, then
+interpolates the result onto the \orchard{} Lagrangian mesh.  For
+envelope-dominated planets (gas giants), a bisection search on the
+central pressure $\Pc$ enforces the surface boundary condition
+$\Psurf = \Patm$.  For core-dominated planets (super-Earths and
+sub-Neptunes with thin envelopes), the surface-pressure shooting is
+replaced by an iterative density-matching scheme, because the standard
+bisection is ill-conditioned when the envelope mass fraction is small.
+We detail the structure equations, the adaptive fine grid construction,
+the central boundary condition, the two shooting strategies, and the
+interpolation back to the evolution grid.
+\end{abstract}
+
+\keywords{planets and satellites: interiors --- planets and satellites:
+physical evolution --- methods: numerical}
+
+% ======================================================================
+\section{Introduction}\label{sec:intro}
+% ======================================================================
+
+The \orchard{} evolution code models the thermal and compositional
+evolution of planets on a one-dimensional Lagrangian mass grid of $N$
+shells.  At each timestep the transport module updates the entropy and
+composition profiles, and a Henyey relaxation solver
+(\S\ref{sec:hse_context}) re-establishes hydrostatic equilibrium.  Both
+modules require an initial guess for the pressure $P(m)$ and radius
+$r(m)$ profiles at $t=0$.
+
+The legacy initialization reads a pre-computed isentrope file (a
+tabulated $(r,P)$ structure for a reference gas giant at fixed entropy)
+and interpolates it onto the mass grid.  This approach has two
+limitations: (i) it is restricted to gas-giant compositions and
+entropies for which a tabulated isentrope exists, and (ii) for
+non-gas-giant planets (sub-Neptunes, super-Earths) the interpolated
+structure can be far from hydrostatic equilibrium, requiring many
+initial Henyey iterations to converge.
+
+The RK4 initialization module (\texttt{rk4\_initial.py}) replaces the
+isentrope interpolation with a direct numerical integration of the
+hydrostatic structure equations.  Given an equation of state, a
+composition profile, and a trial central pressure $\Pc$, it integrates
+outward in enclosed mass $m$ from the center to the surface using
+classical fourth-order Runge--Kutta.  A shooting procedure then adjusts
+$\Pc$ until the resulting structure satisfies the desired boundary
+condition.
+
+The module supports two shooting strategies
+(\S\ref{sec:shooting_gasgiant}, \S\ref{sec:shooting_rocky}), selected
+automatically based on the envelope mass fraction.  For gas giants the
+standard surface-pressure bisection is used.  For core-dominated planets
+a density-matching iteration is employed instead, because the standard
+bisection is ill-conditioned when the envelope is a small fraction of
+the total mass (\S\ref{sec:why_rocky_fails}).
+
+The remainder of this document is organized as follows.
+Section~\ref{sec:equations} presents the structure equations solved by
+the RK4 integrator.  Section~\ref{sec:grid} describes the adaptive fine
+mass grid.  Section~\ref{sec:bc} details the central boundary condition.
+Section~\ref{sec:rk4} gives the RK4 integration scheme.
+Section~\ref{sec:shooting_gasgiant} describes the gas-giant shooting
+method.  Section~\ref{sec:why_rocky_fails} explains why this fails for
+rocky planets.  Section~\ref{sec:shooting_rocky} presents the
+density-matching alternative.  Section~\ref{sec:interp} covers the
+interpolation onto the \orchard{} grid.  Section~\ref{sec:eos_dispatch}
+documents the equation-of-state dispatch across compositional layers.
+
+% ======================================================================
+\section{Context: Role of the Initial Structure}\label{sec:hse_context}
+% ======================================================================
+
+The RK4 module produces initial profiles $r(m)$, $P(m)$, $\rho(m)$,
+and $T(m)$ that serve as the starting point for the evolution.  These
+profiles do not need to be exact: the Henyey relaxation solver in
+\texttt{hydrostatic.py} will refine them at the first timestep.  What
+matters is that the initial guess has:
+\begin{enumerate}
+  \item a physically reasonable planet radius $\Rpl$,
+  \item monotonically decreasing $r(m)$ from surface to center,
+  \item monotonically increasing $P(m)$ from surface to center, and
+  \item correct equation-of-state dispatch in each compositional layer.
+\end{enumerate}
+If any of these conditions are violated, the Henyey iteration
+diverges and produces NaN values on the first timestep, aborting the
+evolution.
+
+% ======================================================================
+\section{Structure Equations}\label{sec:equations}
+% ======================================================================
+
+The integration solves two coupled ordinary differential equations for
+$\ln r$ and $\ln P$ as functions of the enclosed mass $m$, treated as the
+independent variable.  Mass continuity gives
+\begin{equation}\label{eq:dlnr}
+  \frac{\dd \ln r}{\dd m}
+  = \frac{1}{4\pi\,r^{3}\,\rho}\,,
+\end{equation}
+and hydrostatic equilibrium (neglecting rotation) gives
+\begin{equation}\label{eq:dlnP}
+  \frac{\dd \ln P}{\dd m}
+  = -\frac{G\,m}{4\pi\,r^{4}\,P}\,.
+\end{equation}
+At each point along the integration the density $\rho$ is obtained from
+the equation of state as $\rho = \rho(P, S, Y, Z, f_{\rm rock})$, where
+$S$ is the entropy, $Y$ the helium mass fraction, $Z$ the heavy-element
+mass fraction, and $f_{\rm rock}$ the rock fraction within $Z$.  The
+appropriate EOS is selected based on which compositional layer the
+current mass coordinate falls in (\S\ref{sec:eos_dispatch}).
+
+The use of logarithmic variables $(\ln r, \ln P)$ rather than $(r, P)$
+is essential for numerical stability: both $r$ and $P$ span many orders
+of magnitude from center to surface, and the logarithmic form keeps the
+dependent variables of order unity.
+
+% ======================================================================
+\section{Adaptive Fine Mass Grid}\label{sec:grid}
+% ======================================================================
+
+The RK4 integration is performed on a fine internal grid of
+$N_{\rm fine} = 2000$ mass points, independent of the $N$-zone
+\orchard{} evolution grid.  The fine grid must resolve three distinct
+challenges:
+\begin{enumerate}
+  \item Steep gradients near the planetary center, where $r \propto
+    m^{1/3}$ and $\dd r / \dd m$ diverges as $m \to 0$.
+  \item The compositional transition at the core--envelope boundary
+    $m = \Mcore$, where the EOS switches between mantle/core
+    and H/He--metal mixture models.
+  \item The thin H/He envelope in core-dominated planets, which can
+    contain $< 0.01\%$ of the total mass.
+\end{enumerate}
+
+\subsection{Bare Rocky Planets}\label{sec:grid_bare}
+
+For bare rocky planets ($k_{\rm core} = 0$, meaning all $N$ cells are
+mantle or iron core with no H/He envelope), the fine grid is simply
+$N_{\rm fine} + 1$ logarithmically spaced points from $m_{\rm min}$ to
+$\Mpl$.  The log spacing resolves the steep central gradients and
+provides uniform fractional resolution throughout the interior.  No
+envelope segment is needed.
+
+\subsection{Coreless Planets (Gas Giants)}\label{sec:grid_gasgiant}
+
+For coreless planets ($k_{\rm core} = N$, meaning all cells are
+envelope), or when no rocky/icy core is present, the fine grid uses a
+two-segment construction:
+\begin{itemize}
+  \item $N_{\rm log} = 1000$ logarithmically spaced points from
+    $m_{\rm min} = 10^{-8}\,\Mpl$ to $m_{\rm split} = 0.5\,\Mpl$, and
+  \item $N_{\rm lin} = 1000$ linearly spaced points from $m_{\rm split}$
+    to $\Mpl$.
+\end{itemize}
+The logarithmic spacing resolves the center; the linear spacing gives
+uniform resolution in the outer envelope where the atmosphere boundary
+condition matters.
+
+\subsection{Core-Dominated Planets}\label{sec:grid_rocky}
+
+When the planet has a rocky/icy core ($0 < k_{\rm core} < N$), the grid
+is split at the core--envelope boundary mass $m_{\rm cb} = m_b[k_{\rm
+core}]$ rather than at a fixed 50\% of the total mass.  The cell budget
+is divided as follows.  Let $f_{\rm env} = (\Mpl - m_{\rm cb}) / \Mpl$
+be the envelope mass fraction.  Then
+\begin{equation}\label{eq:Nenv}
+  N_{\rm env} = \min\!\bigl(\max(50,\;
+    \lfloor N_{\rm fine} \cdot f_{\rm env}\rfloor),\;
+    N_{\rm fine}/2\bigr),
+\end{equation}
+and $N_{\rm int} = N_{\rm fine} - N_{\rm env}$.  The minimum of~50
+ensures that even an envelope with $f_{\rm env} \sim 10^{-4}$ receives
+at least 50~fine cells, providing adequate support for the subsequent
+interpolation back onto the $N$-zone evolution grid
+(\S\ref{sec:interp}).  The two segments are:
+\begin{itemize}
+  \item \emph{Interior} ($N_{\rm int}$ points): logarithmically spaced
+    from $m_{\rm min}$ to $m_{\rm cb}$.  This covers the iron core and
+    silicate mantle, with the logarithmic spacing concentrating
+    resolution near the center.
+  \item \emph{Envelope} ($N_{\rm env}$ points): logarithmically spaced
+    from $m_{\rm cb}$ to $\Mpl$.  The log spacing concentrates points
+    near the core--envelope boundary (where the EOS transition occurs)
+    and near the surface.
+\end{itemize}
+The core boundary mass $m_{\rm cb}$ is an exact grid point, ensuring
+that the RK4 integration steps cleanly through the EOS transition rather
+than straddling it.
+
+\paragraph{Why the fixed grid fails for rocky planets.}
+With the original two-segment grid (\S\ref{sec:grid_gasgiant}), the
+linear outer segment has a step size of $\Delta m \approx 0.5\,\Mpl /
+N_{\rm lin} = 5 \times 10^{-4}\,\Mpl$.  For a super-Earth with
+$f_{\rm env} = 10^{-4}$, the entire envelope falls within a single step
+of this grid.  No fine-grid points sample the envelope EOS, and the
+subsequent interpolation (\S\ref{sec:interp}) extrapolates flat $r$ and
+$P$ values into all envelope cells of the \orchard{} grid, producing
+non-monotonic profiles that cause the Henyey solver to diverge.
+
+% ======================================================================
+\section{Central Boundary Condition}\label{sec:bc}
+% ======================================================================
+
+The integration starts at the innermost fine-grid point $m_0 = m_{\rm
+min} = 10^{-8}\,\Mpl$ with boundary conditions derived from the
+uniform-density-sphere regularity condition.  Given a trial central
+pressure $\Pc$ and the central density $\rho_{\rm c} =
+\rho(\Pc,\,S_{\rm c},\,Y_{\rm c},\,Z_{\rm c})$ from the EOS at the
+center:
+\begin{equation}\label{eq:r_center}
+  r_0 = \left(\frac{3\,m_0}{4\pi\,\rho_{\rm c}}\right)^{1/3},
+\end{equation}
+\begin{equation}\label{eq:P_center}
+  P_0 = \Pc - \frac{3G}{8\pi}
+    \left(\frac{4\pi\,\rho_{\rm c}}{3}\right)^{4/3}\!m_0^{2/3}\,.
+\end{equation}
+The correction term in Equation~\eqref{eq:P_center} accounts for the
+pressure drop across the innermost sphere of mass $m_0$, ensuring that
+the integration starts from a self-consistent state rather than imposing
+$P = \Pc$ at $m = m_0 > 0$.  If the correction would reduce $P_0$ below
+$\Pc/2$ (which can happen for extremely low $\Pc$ guesses), it is
+clamped to $P_0 = \Pc/2$ to prevent numerical underflow.
+
+% ======================================================================
+\section{RK4 Integration}\label{sec:rk4}
+% ======================================================================
+
+The integration advances from the center ($j=0$) to the surface
+($j = N_{\rm fine}$) using the classical fourth-order Runge--Kutta
+scheme.  At each step, the mass increment is $h_j = m_{j+1} - m_j$ and
+the state vector is $\mathbf{u}_j = (\ln r_j,\;\ln P_j)$.  The four
+RK4 stages are:
+\begin{equation}\label{eq:rk4_stages}
+\begin{aligned}
+  \mathbf{k}_1 &= \mathbf{f}(m_j,\;\mathbf{u}_j), \\
+  \mathbf{k}_2 &= \mathbf{f}\!\left(m_j + \tfrac{h}{2},\;
+    \mathbf{u}_j + \tfrac{h}{2}\,\mathbf{k}_1\right), \\
+  \mathbf{k}_3 &= \mathbf{f}\!\left(m_j + \tfrac{h}{2},\;
+    \mathbf{u}_j + \tfrac{h}{2}\,\mathbf{k}_2\right), \\
+  \mathbf{k}_4 &= \mathbf{f}\!\left(m_{j+1},\;
+    \mathbf{u}_j + h\,\mathbf{k}_3\right), \\
+  \mathbf{u}_{j+1} &= \mathbf{u}_j + \frac{h}{6}\bigl(
+    \mathbf{k}_1 + 2\,\mathbf{k}_2 + 2\,\mathbf{k}_3
+    + \mathbf{k}_4\bigr),
+\end{aligned}
+\end{equation}
+where $\mathbf{f} = (\dd\ln r/\dd m,\;\dd\ln P/\dd m)$ from
+Equations~\eqref{eq:dlnr}--\eqref{eq:dlnP}.  The density $\rho$ is
+re-evaluated from the EOS at each sub-step using the current (trial)
+pressure.  For the stages at the midpoint $m_j + h/2$, the composition
+$(S, Y, Z, f_{\rm rock})$ is taken from the fine-grid cell $j$; for the
+final stage at $m_{j+1}$, the composition is taken from cell
+$\min(j+1,\,N_{\rm fine}-1)$.
+
+Two safety measures prevent the integration from producing unphysical
+results:
+\begin{enumerate}
+  \item \textbf{Density floor.}  If the EOS returns $\rho \leq 0$ or a
+    non-finite value, a floor value $\rho_{\rm floor} = 10^{-6}\;\mathrm
+    {g\;cm^{-3}}$ is substituted.  This prevents $\dd\ln r/\dd m$ from
+    diverging in the low-density outer envelope.
+  \item \textbf{Radius cap.}  The radius is capped at $r_{\rm max} =
+    10^{12}\;\mathrm{cm}$ ($\approx 100\;R_{\rm J}$) to prevent
+    floating-point overflow in $\exp(3\ln r)$.  If either $\ln r$ or
+    $\ln P$ becomes non-finite after an RK4 step, the state is frozen at
+    the last valid values.
+\end{enumerate}
+
+% ======================================================================
+\section{Shooting: Gas-Giant Mode}\label{sec:shooting_gasgiant}
+% ======================================================================
+
+For envelope-dominated planets where the core mass fraction is less than
+90\% of the total, the central pressure is determined by a standard
+bisection shooting method.  The target is to match the surface pressure:
+\begin{equation}\label{eq:shooting_target}
+  P_{\rm surf}(\Pc) = \Patm\,,
+\end{equation}
+where $\Patm$ is the atmospheric pressure from the parameter file
+(typically $10^6\;\mathrm{dyn\;cm^{-2}} = 1\;\mathrm{bar}$).
+
+\subsection{Initial Guess and Bracketing}
+
+The initial guess for $\Pc$ is based on the planet-to-Jupiter mass ratio:
+\begin{equation}\label{eq:Pc_guess}
+  \Pc^{(0)} = 4 \times 10^{13}
+    \cdot\bigl[\max(M_{\rm p}/M_{\rm J},\;0.1)\bigr]^{2}
+    \;\mathrm{dyn\;cm^{-2}}\,,
+\end{equation}
+clipped to the range $[10^{11},\,10^{16}]\;\mathrm{dyn\;cm^{-2}}$.
+The bisection brackets are initialized at $P_{\rm lo} = 0.01\,\Pc^{(0)}$
+and $P_{\rm hi} = 100\,\Pc^{(0)}$.  If the initial brackets do not
+straddle the root, they are expanded by factors of~10 up to 10~times.
+
+\subsection{Bisection Iteration}
+
+At each iteration, the geometric midpoint $\Pc = \sqrt{P_{\rm lo}\,
+P_{\rm hi}}$ is evaluated by running the full RK4 integration and
+reading off $\Psurf = P_{\rm cells}[0]$.  If $\Psurf > \Patm$ the
+central pressure is too high, and $P_{\rm hi} \gets \Pc$; otherwise
+$P_{\rm lo} \gets \Pc$.  Convergence is declared when the relative error
+$|\Psurf - \Patm|/\Patm < 1\%$.  The maximum number of iterations
+is~60.
+
+% ======================================================================
+\section{Why Gas-Giant Shooting Fails for Rocky
+  Planets}\label{sec:why_rocky_fails}
+% ======================================================================
+
+For core-dominated planets with thin H/He envelopes, the surface-pressure
+bisection (\S\ref{sec:shooting_gasgiant}) fails for two reasons:
+
+\paragraph{(1) The surface pressure function is non-monotonic.}
+The function $\Psurf(\Pc)$ is well-behaved and monotonically increasing
+for gas giants: increasing $\Pc$ compresses the interior more and raises
+the surface pressure.  For rocky planets with thin envelopes, however,
+$\Psurf(\Pc)$ is wildly non-monotonic.  At some values of $\Pc$ the
+pressure underflows to zero partway through the integration; at others
+the integration completes but with $\Psurf$ orders of magnitude above
+$\Patm$.  This non-monotonicity arises because the thin envelope carries
+negligible mass and therefore exerts negligible gravitational influence
+on the pressure profile.  The surface pressure is determined almost
+entirely by the pressure at the core--envelope boundary, which itself
+depends sensitively on the interior structure.  The bisection can
+converge to a spurious root where $\Psurf \approx \Patm$ by accident,
+but the resulting structure has an unphysically small planet radius and
+non-monotonic profiles.
+
+\paragraph{(2) No physical root exists.}
+For a physically correct central pressure (e.g., $\Pc \approx 3.6
+\times 10^{12}\;\mathrm{dyn\;cm^{-2}}$ for a $1\;M_\oplus$ planet), the
+mantle integration produces a core-boundary pressure $\Pcb \sim
+10^{9}$--$10^{12}\;\mathrm{dyn\;cm^{-2}}$.  The thin envelope (mass
+fraction $\sim 10^{-4}$) cannot reduce $P$ from $\Pcb$ to
+$\Patm = 10^{6}\;\mathrm{dyn\;cm^{-2}}$.  The fractional pressure change
+across the envelope is
+\begin{equation}\label{eq:DeltalnP}
+  \Delta\ln P \approx
+    -\frac{G\,\Mpl}{4\pi\,\Rcore^{4}\,\Pcb}\;\Menv\,,
+\end{equation}
+which for $\Mpl = M_\oplus$, $\Rcore \approx R_\oplus$, $\Pcb = 10^{9}$,
+and $\Menv = 10^{-4}\,\Mpl$ evaluates to $|\Delta\ln P| \sim 0.1$,
+i.e., a $\sim 10\%$ pressure drop---far short of the factor of
+$\sim 10^{3}$--$10^{6}$ needed.
+
+In contrast, the Henyey relaxation solver in the main evolution code
+handles this correctly because it imposes $P[0] = \Patm$ as a fixed
+outer boundary condition and solves inward, rather than integrating
+outward from the center.
+
+% ======================================================================
+\section{Shooting: Rocky-Planet Mode}\label{sec:shooting_rocky}
+% ======================================================================
+
+For planets where the envelope mass fraction is less than~10\% of the
+total mass, the module switches to a density-matching iteration that
+seeks a physically reasonable interior structure rather than matching
+the surface pressure.  The surface pressure will be corrected by the
+Henyey relaxation solver at the first evolution timestep.
+
+\subsection{Classification}\label{sec:classification}
+
+A planet is classified as ``rocky'' (core-dominated) in two cases:
+\begin{enumerate}
+  \item \textbf{Bare rock} ($k_{\rm core} = 0$): all cells are
+    mantle/core with no H/He envelope.  This corresponds to
+    $M_{\rm core} = \Mpl$ in the parameter file.
+  \item \textbf{Thin envelope} ($0 < k_{\rm core} < N$ and
+    $f_{\rm env} < 0.1$): the envelope mass fraction
+    \begin{equation}\label{eq:rocky_criterion}
+      f_{\rm env} \equiv \frac{\Mpl - m_b[k_{\rm core}]}{\Mpl}
+    \end{equation}
+    is less than 10\%.
+\end{enumerate}
+Together these cases capture bare super-Earths, super-Earths with thin
+atmospheres, and sub-Neptunes with small volatile envelopes.  Gas giants
+and ice giants with substantial envelopes ($k_{\rm core} \geq N$ or
+$f_{\rm env} \geq 0.1$) use the standard bisection
+(\S\ref{sec:shooting_gasgiant}).
+
+\subsection{Central Pressure Estimate}
+
+The initial estimate of $\Pc$ uses the uniform-sphere formula.  Let
+$\bar{\rho}$ be a characteristic mean density, obtained from the mantle
+EOS evaluated at the mantle entropy $S_{\rm mantle}$ and a reference
+pressure of $100\;\mathrm{GPa}$:
+\begin{equation}\label{eq:rhobar}
+  \bar{\rho} = \rho_{\rm mantle}(S_{\rm mantle},\;100\;\mathrm{GPa})\,.
+\end{equation}
+The uniform-sphere central pressure is then
+\begin{equation}\label{eq:Pc_est}
+  \Pc^{(0)} = \frac{3G}{8\pi}
+    \left(\frac{4\pi\,\bar{\rho}}{3}\right)^{4/3}\!\Mpl^{2/3}\,,
+\end{equation}
+clipped to $[10^{10},\,10^{16}]\;\mathrm{dyn\;cm^{-2}}$.  The target
+planet radius is similarly estimated as
+\begin{equation}\label{eq:R_target}
+  R_{\rm target} = \left(\frac{3\,\Mpl}
+    {4\pi\,\bar{\rho}}\right)^{1/3}\!.
+\end{equation}
+
+\subsection{Iterative Radius Matching}
+
+Starting from $\Pc^{(0)}$, the iteration proceeds as follows:
+\begin{enumerate}
+  \item Perform the full RK4 integration at the current $\Pc$ to obtain
+    $r_b$, $P_{\rm cells}$, $\rho_{\rm cells}$, and $T_{\rm cells}$.
+  \item Evaluate a quality score:
+    \begin{equation}\label{eq:score}
+      \mathcal{S} = \bigl|\ln(\Rpl / R_{\rm target})\bigr|
+        + \begin{cases} 10 & \text{if profiles are non-monotonic,} \\
+                         0  & \text{otherwise.}\end{cases}
+    \end{equation}
+  \item If the profiles are monotonic and $|\Rpl / R_{\rm target} - 1|
+    < 0.3$, accept the solution.
+  \item Otherwise, adjust $\Pc$ using a damped correction:
+    \begin{equation}\label{eq:Pc_update}
+      \Pc \gets \Pc \times
+        \mathrm{clip}\!\left[\left(\frac{\Rpl}{R_{\rm target}}
+        \right)^{-2},\;0.3,\;3.0\right].
+    \end{equation}
+    The exponent $-2$ is a damped version of the $\Rpl^{-4}$ scaling
+    expected from hydrostatic equilibrium ($\Pc \propto \Mpl^{2} /
+    \Rpl^{4}$), and the clipping prevents overshooting.
+  \item Repeat up to 30 iterations, tracking the best result (lowest
+    $\mathcal{S}$).
+\end{enumerate}
+
+In practice, convergence typically occurs within 2--5 iterations.  For
+the benchmark case of a $1\;M_\oplus$ super-Earth with $M_{\rm core} =
+0.9999\;M_\oplus$, the iteration converges in 3~iterations to $\Pc =
+4.3 \times 10^{12}\;\mathrm{dyn\;cm^{-2}}$ and $\Rpl = 1.03\;R_\oplus$.
+
+% ======================================================================
+\section{Interpolation onto the Evolution Grid}\label{sec:interp}
+% ======================================================================
+
+After the RK4 integration, the fine-grid profiles $\ln r(m)$ and
+$\ln P(m)$ are interpolated onto the \orchard{} mass boundaries
+$m_b[k]$ ($k = 0,\ldots,N$, descending from $\Mpl$ at the surface to
+$\sim 0$ at the center).
+
+\subsection{Boundary Values}
+
+Linear interpolation is performed in $(\ln r,\,m)$ and $(\ln P,\,m)$
+space using \texttt{scipy.interpolate.interp1d}.  The mass coordinates
+are clamped to $[m_{\rm min},\,\Mpl]$ to avoid extrapolation at the
+center where $m_b[N] \approx 0 < m_{\rm min}$.  The boundary radius and
+pressure are recovered as
+\begin{equation}
+  r_b[k] = \exp\!\bigl(\hat{f}_{\ln r}(m_b[k])\bigr), \quad
+  P_b[k] = \exp\!\bigl(\hat{f}_{\ln P}(m_b[k])\bigr),
+\end{equation}
+where $\hat{f}$ denotes the interpolant.
+
+\subsection{Cell-Centered Values}
+
+Cell-centered pressures are computed as the geometric mean of the
+bounding pressures:
+\begin{equation}\label{eq:Pcell}
+  P_k = \sqrt{P_b[k]\,P_b[k+1]}\,,
+  \qquad k = 0,\ldots,N-1\,.
+\end{equation}
+The innermost cell ($k = N-1$) is clamped to $P_{N-1} \geq \Pc / 2$ to
+prevent underflow from the extrapolation at $m \approx 0$.
+
+\subsection{Density and Temperature Recovery}
+
+With $P_k$ determined, the density and temperature at each cell center
+are recomputed from the equation of state appropriate to that cell's
+compositional layer (\S\ref{sec:eos_dispatch}).  This ensures
+thermodynamic consistency between the pressure, density, and temperature
+profiles even if the EOS evaluations during the RK4 integration were
+approximate (due to the finite step size).
+
+% ======================================================================
+\section{Equation-of-State Dispatch}\label{sec:eos_dispatch}
+% ======================================================================
+
+Both the fine-grid RK4 integration and the final cell-centered density
+recovery use the same EOS dispatch based on the cell's compositional
+layer.  The \orchard{} grid is divided into three regions by the indices
+$k_{\rm core}$ and $k_{\rm Fe}$:
+
+\begin{enumerate}
+  \item \textbf{Envelope} ($k < k_{\rm core}$):
+    Hydrogen--helium--metal mixture EOS.  Given entropy $S$, $\log_{10}
+    P$, helium fraction $Y$, metallicity $Z$, and rock fraction
+    $f_{\rm rock}$, returns $\log_{10}\rho$ and $\log_{10}T$.  Available
+    backends: Chabrier \& Debras (2021, ``cd''), Chabrier et al.\
+    (2019, ``cms''), or Saumon et al.\ (1995, ``scvh'').
+
+  \item \textbf{Mantle} ($k_{\rm core} \leq k < k_{\rm Fe}$):
+    Silicate EOS (Mg$_2$SiO$_4$ ANEOS, MgSiO$_3$, or AQUA water).
+    Given entropy $S_{\rm mantle}$ and pressure $P$ in GPa, returns
+    $\rho$ and $T$.
+
+  \item \textbf{Iron core} ($k \geq k_{\rm Fe}$):
+    Iron alloy or pure iron EOS.  Given entropy $S_{\rm core}$ and $P$
+    in GPa, returns $T$ via $(s, P)$ inversion, then $\rho$ via $(P,T)$
+    lookup.
+\end{enumerate}
+
+During the RK4 integration, the composition at each fine-grid cell is
+looked up from the \orchard{} grid via a \texttt{searchsorted} mapping
+from the fine-grid mass coordinates to the \orchard{} cell indices.
+This ensures that the EOS transition occurs at the correct mass
+coordinate regardless of the fine-grid spacing.
+
+For the envelope, composition is set to $S = S_{\rm ini}$, $Y = Y_{\rm
+ini}\,(1 - Z_{\rm ini})$, $Z = Z_{\rm ini}$, and $f_{\rm rock} =
+f_{\rm rock,\,ini}$.  For mantle and core cells, $Y = Z = f_{\rm rock}
+= 0$ and the entropy is set to $S_{\rm mantle}$ and $S_{\rm core}$
+respectively.
+
+% ======================================================================
+\section{Summary}\label{sec:summary}
+% ======================================================================
+
+The RK4 initialization module provides \orchard{} with self-consistent
+initial hydrostatic structures for any planet mass, composition, and
+initial entropy, replacing the legacy approach of interpolating a
+pre-computed gas-giant isentrope.  Two key design choices enable it to
+work across the full range of planet types from gas giants to bare
+super-Earths:
+
+\begin{enumerate}
+  \item \textbf{Adaptive fine grid} (\S\ref{sec:grid}): The fine mass
+    grid adapts to the planet architecture.  Bare rocky planets use a
+    single log-spaced segment (\S\ref{sec:grid_bare}).  Planets with
+    cores and envelopes split the grid at the core--envelope boundary,
+    guaranteeing a minimum of 50~fine cells in the envelope even when
+    it contains $< 0.01\%$ of the total mass
+    (\S\ref{sec:grid_rocky}).  Gas giants use a two-segment log/linear
+    construction (\S\ref{sec:grid_gasgiant}).  This prevents the
+    interpolation from producing flat, non-monotonic profiles.
+
+  \item \textbf{Dual shooting strategy} (\S\ref{sec:shooting_gasgiant},
+    \S\ref{sec:shooting_rocky}): Gas giants use standard bisection on
+    $\Psurf = \Patm$.  Core-dominated planets---both bare rocks
+    ($k_{\rm core} = 0$) and thin-envelope sub-Neptunes/super-Earths---use
+    iterative density matching to find a $\Pc$ that produces monotonic
+    profiles with a physically reasonable radius, since the surface-%
+    pressure bisection is ill-conditioned when the envelope mass fraction
+    is small or zero (\S\ref{sec:why_rocky_fails}).  In both cases, the
+    Henyey relaxation solver refines the structure at the first evolution
+    timestep.
+\end{enumerate}
+
+\end{document}

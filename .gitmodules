@@ -1,0 +1,4 @@
+[submodule "eos"]
+	path = eos
+	url = https://github.com/robtejada/eos.git
+	branch = eos_orchard

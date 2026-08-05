@@ -1,0 +1,13 @@
+# No LFS tracking in the parent repo. The previous install flow required
+# GIT_LFS_SKIP_SMUDGE=1 on clone (to avoid pulling the eos/ submodule's
+# 27 GB through LFS), which also left these small parent-repo data files
+# as pointer stubs and triggered "could not convert string to float:
+# 'version https://git-lfs.github.com/spec/v1'" at import time. Storing
+# them as regular git objects (~62 MB total) eliminates the trap and
+# saves LFS bandwidth on every clone. The eos/ submodule still uses
+# LFS for its 27 GB of EOS tables; setup_eos.py fetches those from
+# Zenodo instead, preserving the LFS bandwidth budget.
+
+# Files excluded from `git archive` (Zenodo / release tarballs).
+.gitattributes export-ignore
+.gitignore     export-ignore

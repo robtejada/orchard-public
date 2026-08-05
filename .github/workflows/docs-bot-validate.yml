@@ -1,0 +1,36 @@
+name: ORCHARD docs bot — validate corpus
+
+# Fast CI check that the documentation corpus still builds when docs, examples,
+# or the bot code change. Uses the stdlib-only build_corpus.py (no installs), so
+# it runs in seconds and catches broken notebooks / parsing issues early.
+
+on:
+  push:
+    paths:
+      - "FAQ.md"
+      - "README.md"
+      - "parameter_descriptions.md"
+      - "tutorials/**"
+      - "parameter_examples/**"
+      - "writeups/**"
+      - "docs_bot/**"
+  pull_request:
+    paths:
+      - "FAQ.md"
+      - "README.md"
+      - "parameter_descriptions.md"
+      - "tutorials/**"
+      - "parameter_examples/**"
+      - "writeups/**"
+      - "docs_bot/**"
+
+jobs:
+  build-corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build corpus (stdlib only)
+        run: python docs_bot/build_corpus.py

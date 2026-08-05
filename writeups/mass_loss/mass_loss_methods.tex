@@ -1,0 +1,807 @@
+\documentclass{aastex701}
+
+\usepackage{amsmath,amssymb}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\Mdot}{\dot{M}}
+\newcommand{\Menv}{M_{\rm env}}
+\newcommand{\Mcore}{M_{\rm core}}
+\newcommand{\Mp}{M_{\rm p}}
+\newcommand{\Rrcb}{R_{\rm rcb}}
+\newcommand{\Rp}{R_{\rm p}}
+\newcommand{\Rs}{R_{\rm s}}
+\newcommand{\Tint}{T_{\rm int}}
+\newcommand{\Teq}{T_{\rm eq}}
+\newcommand{\cs}{c_{\rm s}}
+\newcommand{\Lint}{L_{\rm int}}
+\newcommand{\Lbol}{L_{\rm bol}}
+\newcommand{\Lxuv}{L_{\rm XUV}}
+\newcommand{\Ladv}{L_{\rm adv}}
+\newcommand{\Fxuv}{F_{\rm XUV}}
+\newcommand{\orchard}{\textsc{orchard}}
+
+\shorttitle{ORCHARD Mass Loss Methods}
+\shortauthors{Tejada Arevalo}
+
+\begin{document}
+
+\title{Atmospheric Mass Loss in the ORCHARD Planetary Evolution Code}
+
+\author{Roberto Tejada Arevalo}
+\email{rarevalo@ucsc.edu}
+\affiliation{Department of Astrophysical Sciences, Princeton University, Princeton, NJ 08544, USA}
+
+\begin{abstract}
+We describe the atmospheric mass-loss framework implemented in the
+\orchard{} planetary evolution code.  The module couples three physical
+mechanisms---isothermal Parker winds, bolometric and intrinsic
+energy-limited escape, and XUV photoevaporation---within a two-phase
+evolutionary picture consisting of an early boil-off stage and a
+subsequent post-boil-off stage.  Mass loss is self-consistently coupled
+to the interior structure.  Envelope mass is removed by uniformly scaling
+the Lagrangian mass grid.  The hydrostatic equilibrium solver then
+recomputes the density, pressure, radius, and temperature profiles.  We
+detail each mass-loss rate prescription, the phase-transition criterion,
+the advective energy feedback, grid-adjustment procedure, and
+timestep constraints.
+\end{abstract}
+
+\keywords{planets and satellites: atmospheres --- planets and satellites:
+physical evolution --- methods: numerical}
+
+% ======================================================================
+\section{Introduction}\label{sec:intro}
+% ======================================================================
+
+Close-in sub-Neptune and super-Earth exoplanets lose their
+hydrogen-helium envelopes through a combination of core-powered mass
+loss \citep{Ginzburg2016, Gupta2019} and XUV photoevaporation
+\citep{Lopez2013, Owen2017}.  This sculpts the observed radius valley
+separating bare rocky cores from planets that retain volatile envelopes.
+
+\orchard{} implements a unified mass-loss module that captures both
+the early, rapid boil-off phase---in which the planet sheds mass on a
+timescale shorter than its Kelvin--Helmholtz contraction
+time---and the subsequent post-boil-off phase dominated by XUV-driven
+escape.  The treatment follows \citet{Tang2024}.  It is coupled at every
+evolutionary timestep to the code's Henyey relaxation solver for
+hydrostatic equilibrium and to its implicit transport solver for entropy
+and composition.
+
+Section~\ref{sec:formulation} presents the shrinking-domain Lagrangian
+formulation that justifies adding mass loss as a clean operator-split
+step on top of the existing structure equations.
+Section~\ref{sec:rates} presents the individual mass-loss rate
+prescriptions.  Section~\ref{sec:phases} describes the two-phase logic
+and the transition criterion.  Section~\ref{sec:grid} explains how
+the Lagrangian grid is adjusted after mass removal and how
+hydrostatic equilibrium is restored.
+Section~\ref{sec:diagnostics} summarizes the diagnostic outputs.
+
+% ======================================================================
+\section{Shrinking-Domain Lagrangian Formulation}\label{sec:formulation}
+% ======================================================================
+
+The structure equations of \citet{TejadaArevalo2026} (their
+Equations~1--6) describe a planet of fixed total mass $\Mp$ on the
+Lagrangian domain $M_{r}\in[0,\Mp]$.  Mass loss makes the outer boundary
+time-dependent: the planet's enclosed mass becomes
+\begin{equation}\label{eq:Mt}
+  M(t) \;=\; \Mp(t_{0})
+  \;-\; \int_{t_{0}}^{t}\Mdot_{\rm wind}(t')\,\dd t',
+  \qquad \Mdot_{\rm wind}(t)\ge 0,
+\end{equation}
+and the structure equations live on the shrinking Lagrangian domain
+$M_{r}\in[0,M(t)]$.  We choose the absolute Lagrangian coordinate
+$M_{r}$ as the independent variable rather than a normalised coordinate
+$\xi = M_{r}/M(t)$.  At fixed interior $M_{r}$ no advective term enters
+the time derivative.  A normalised coordinate, in contrast, would inject
+$(M_{r}\Mdot/M^{2})\,\partial/\partial M_{r}$ corrections into hydrostatic
+equilibrium, energy, and composition equations.  This is the
+formulation adopted by \texttt{MESA} \citep{Paxton2011, Paxton2019} for
+stellar winds and by every \texttt{MESA}-based planet
+photoevaporation paper \citep[e.g.,][]{Lopez2013, Owen2017,
+ChenRogers2016, Mordasini2020, Malsky2020, Rogers2021}.
+
+The consequences for Equations~1--6 of \citet{TejadaArevalo2026} are:
+
+\begin{enumerate}
+  \item \textbf{Hydrostatic equilibrium and mass continuity (their
+        Eqs.~1--2) are unchanged in form} on $[0,M(t)]$:
+        \begin{equation}\label{eq:hse}
+          \frac{\dd P}{\dd M_{r}}
+            = -\frac{G\,M_{r}}{4\pi\,r^{4}}
+              + \frac{\Omega(t)^{2}}{6\pi\,r}\,,
+          \qquad
+          \frac{\dd r}{\dd M_{r}}
+            = \frac{1}{4\pi\,r^{2}\,\rho}\,,
+        \end{equation}
+        because at fixed $M_{r}$ both expressions are quasi-static
+        statements of force and mass balance, independent of
+        $\Mdot$ to leading order.  In particular, the Henyey
+        relaxation solver of \orchard{} requires no new equations
+        or new state variables; its 2N block-tridiagonal Jacobian
+        is unaffected.
+
+  \item \textbf{The outer pressure boundary condition is re-evaluated
+        at the current $(M(t),R(t))$.}  Surface gravity becomes
+        $g_{\rm surf}(t) = G\,M(t)/R(t)^{2}$.  The atmospheric
+        boundary condition module returns $T_{\rm int}(t)$ and
+        $T_{\rm eff}(t)$ at the post-mass-loss surface conditions.
+        \orchard{}'s atmosphere modules (\texttt{c23}, \texttt{c26},
+        \texttt{f07}, \texttt{rock\_gray}, etc.) are queried unchanged.
+
+  \item \textbf{The interior energy and composition equations (their
+        Eqs.~3--6) are unchanged in form for surviving shells.}  At
+        fixed Lagrangian $M_{r}$, the entropy equation
+        \begin{equation}\label{eq:Lprime}
+          \frac{\partial L}{\partial M_{r}}
+            = -\,T\,\frac{\partial S}{\partial t}\bigg|_{M_{r}}
+              -\sum_{i}\!\bigl(\partial U/\partial X_{i}\bigr)_{S,\rho}\,
+                \frac{\partial X_{i}}{\partial t}\bigg|_{M_{r}}
+              + \epsilon_{\rm rad} + \epsilon_{L}\,,
+        \end{equation}
+        and the composition equations
+        \begin{equation}\label{eq:Xprime}
+          N_{A}\,\frac{\partial X_{i}}{\partial t}\bigg|_{M_{r}}
+            = -\,\frac{\partial}{\partial M_{r}}
+              \!\bigl(4\pi\,r^{2}\,F_{i}\bigr)\,,
+        \end{equation}
+        retain their original right-hand sides.  No $\Mdot$ term
+        appears in the interior PDE; this is what allows the
+        transport solver in \orchard{} to be re-used unchanged.
+
+  \item \textbf{A new global equation (mass conservation) accompanies
+        the moving boundary:}
+        \begin{equation}\label{eq:dMdt}
+          \frac{\dd M}{\dd t} \;=\; -\,\Mdot_{\rm wind}(t).
+        \end{equation}
+
+  \item \textbf{The surface composition is advected away with the
+        wind.}  Defining the species mass budget
+        $M_{i}(t) = \int_{0}^{M(t)}\!X_{i}\,\dd M_{r}$ and applying
+        Leibniz' rule on the moving upper limit gives
+        \begin{equation}\label{eq:Xboundary}
+          \frac{\dd M_{i}}{\dd t}
+            = -\!\left[4\pi\,r^{2}\,F_{i}\right]_{0}^{M(t)}
+              \;-\; X_{i,{\rm surf}}\,\Mdot_{\rm wind}.
+        \end{equation}
+        Because the wind is launched from the upper atmosphere where
+        convection has homogenised composition, $X_{i,{\rm surf}}$ is
+        the cell-zero composition of the post-transport profile.
+        No new flux term enters the transport solver; the surface
+        composition is simply discarded with the lost mass during
+        the rezone step (Section~\ref{sec:grid}).
+
+  \item \textbf{The wind carries away thermal, kinetic, and
+        gravitational energy.}  Defining the planet's total
+        energy $E_{\rm tot}(t) = \int_{0}^{M(t)}\!
+        \bigl[U + \tfrac{1}{2}v^{2} - GM_{r}/r\bigr]\,\dd M_{r}$ and
+        applying Leibniz' rule on the upper limit gives
+        \begin{equation}\label{eq:Eledger}
+          \frac{\dd E_{\rm tot}}{\dd t}
+            = \int_{0}^{M(t)}\!\!
+              \bigl(\epsilon_{\rm rad}+\epsilon_{L}\bigr)\,\dd M_{r}
+              - L_{\rm surf}
+              - \Mdot_{\rm wind}\!
+                \left[h_{\rm surf} + \tfrac{1}{2}v_{\rm wind}^{2}
+                      - \frac{G\,M}{R}\right],
+        \end{equation}
+        where $h = U + P/\rho$ is specific enthalpy.  The bracketed
+        term is the specific total energy of the escaping material.
+        For energy-limited photoevaporation it is implicit in the
+        $\Mdot$ formula, since the heating efficiency $\eta$ already
+        encodes how much XUV energy goes into wind kinetic energy
+        versus re-radiation.  It is nevertheless tracked explicitly in
+        \orchard{} as a diagnostic (Section~\ref{sec:diagnostics}).
+\end{enumerate}
+
+In this formulation, mass loss is a clean operator-split addition to
+the existing solver.  The transport and Henyey relaxation steps run
+unchanged on the current domain.  Afterwards $\Mdot_{\rm wind}$ is
+evaluated from one of the prescriptions (Section~\ref{sec:rates}); the
+mass grid is updated to remove $\Delta M = \Mdot_{\rm wind}\,\Delta t$
+of envelope mass (Section~\ref{sec:grid}); the boundary condition is
+re-evaluated at the new $(M(t+\Delta t),R(t+\Delta t))$; and a final
+hydrostatic re-equilibration absorbs the residual.
+
+% ======================================================================
+\section{Mass-Loss Rate Prescriptions}\label{sec:rates}
+% ======================================================================
+
+Three independent mass-loss rate estimates are computed at each timestep.
+The final rate is determined by the evolutionary phase
+(Section~\ref{sec:phases}).
+
+% ----------------------------------------------------------------------
+\subsection{Isothermal Parker Wind}\label{subsec:parker}
+% ----------------------------------------------------------------------
+
+Following \citet{Parker1958} and \citet{Tang2024} (their Equations~4--6),
+we solve the isothermal, spherically symmetric, steady-state wind
+equation for the velocity at the radiative--convective boundary (RCB).
+
+The isothermal sound speed is
+\begin{equation}\label{eq:cs}
+  \cs = \sqrt{\frac{k_{\rm B}\,\Teq}{\mu}}\,,
+\end{equation}
+where $\Teq$ is the equilibrium temperature and $\mu$ is the mean
+molecular weight of the outflowing gas (default
+$\mu = 2.35\,m_{\rm H}$).  The sonic radius, at which the wind
+velocity equals the sound speed, is
+\begin{equation}\label{eq:Rs}
+  \Rs = \frac{G\,\Mp}{2\,\cs^{2}}\,.
+\end{equation}
+
+The Parker wind equation relates the velocity $v$ at radius $r$ to the
+sound speed through the implicit relation
+\begin{equation}\label{eq:parker}
+  \left(\frac{v}{\cs}\right)^{2}
+  - \ln\left(\frac{v}{\cs}\right)^{2}
+  = -3 + 4\ln\!\left(\frac{r}{\Rs}\right) + \frac{4\,\Rs}{r}\,.
+\end{equation}
+For subsonic flow at the RCB ($\Rrcb < \Rs$), the velocity is obtained
+by inverting Equation~\eqref{eq:parker} using the Lambert-$W$ function
+\citep[see][]{Cranmer2004}
+\begin{equation}\label{eq:lambert}
+  \left(\frac{v_{\rm rcb}}{\cs}\right)^{2}
+  = -W_{0}\!\bigl(-e^{-f}\bigr),
+  \qquad
+  f = 3 - 4\ln\!\left(\frac{\Rrcb}{\Rs}\right) - \frac{4\,\Rs}{\Rrcb}\,,
+\end{equation}
+where $W_{0}$ is the principal branch of the Lambert-$W$ function.  A
+physical solution requires the argument $-e^{-f}$ to lie in
+$[-1/e,\,0)$.  If $\Rrcb \ge \Rs$, the flow is already supersonic
+and $v_{\rm rcb} = \cs$ is adopted as a lower bound.
+
+The Parker wind mass-loss rate is then
+\begin{equation}\label{eq:mdot_parker}
+  \Mdot_{\rm parker} = 4\pi\,\Rrcb^{2}\,\rho_{\rm rcb}\,v_{\rm rcb}\,,
+\end{equation}
+where $\rho_{\rm rcb}$ is the density at the RCB.  This rate is
+\emph{not} energy-limited; it depends on the local thermodynamic
+conditions at the RCB rather than on the total available luminosity.
+
+% ----------------------------------------------------------------------
+\subsection{Energy-Limited Escape}\label{subsec:elim}
+% ----------------------------------------------------------------------
+
+Two energy-limited rates cap the mass loss when the available luminosity
+is insufficient to sustain the hydrodynamic wind.
+
+\paragraph{Bolometric energy-limited rate.}
+The total luminosity intercepted at the RCB---including both the
+intrinsic luminosity $\Lint$ and re-radiated stellar heating---sets an
+upper bound on the escape rate \citep[Equation~22 of][]{Tang2024}:
+\begin{equation}\label{eq:mdot_bol}
+  \Mdot_{\rm bol} = \frac{\Lbol^{\rm rcb}}{G\,\Mp / \Rrcb}\,,
+\end{equation}
+where the bolometric luminosity at the RCB is
+\begin{equation}\label{eq:Lbol}
+  \Lbol^{\rm rcb} = \Lint + 4\pi\,\Rrcb^{2}\,\sigma_{\rm SB}\,\Teq^{4}\,.
+\end{equation}
+
+\paragraph{Intrinsic energy-limited rate.}
+When only the planet's own cooling luminosity drives the outflow
+\citep[Equation~27 of][]{Tang2024}:
+\begin{equation}\label{eq:mdot_int}
+  \Mdot_{\rm int} = \frac{\Lint}{G\,\Mp / \Rrcb}\,.
+\end{equation}
+An optional bottleneck correction replaces the denominator with
+$G\Mp/\Rrcb - G\Mp/R_{\tau_h}$, where $R_{\tau_h}$ is the radius at
+optical depth $\tau = 2/3$.  This correction is not used in the default
+configuration.
+
+% ----------------------------------------------------------------------
+\subsection{XUV Photoevaporation}\label{subsec:xuv}
+% ----------------------------------------------------------------------
+
+After the boil-off phase, XUV-driven escape dominates the mass-loss
+budget for sub-Neptunes.  \orchard{} implements the photoevaporation
+prescription of \citet{ChenRogers2016} (their \S2.3, hereafter CR16).
+CR16 combine the energy-limited \emph{escape} rate of
+\citet{Erkaev2007} with the recombination-limited \emph{radiative}
+ceiling of \citet{MurrayClay2009}, and select the smaller of the two
+at each timestep.
+
+\paragraph{Stellar XUV luminosity.}  Two parametrisations of the host
+star's XUV evolution are supported.  The default
+\citep[\texttt{xuv\_evolution\_model = ribas05},][]{Ribas2005} is a
+saturation plateau plus power-law decay,
+\begin{equation}\label{eq:Lxuv}
+  \Lxuv(t) =
+  \begin{cases}
+    f_{\rm sat}\,L_{\star}
+      & t \le t_{\rm sat}\,,\\[4pt]
+    f_{\rm sat}\,L_{\star}
+      \left(\dfrac{t}{t_{\rm sat}}\right)^{-1.5}
+      & t > t_{\rm sat}\,,
+  \end{cases}
+\end{equation}
+with $f_{\rm sat} = 10^{-3.5}$ and $t_{\rm sat} = 100$~Myr.  The
+alternative \citep[\texttt{xuv\_evolution\_model = rogers21},
+following][]{Rogers2021} adds an explicit stellar-mass dependence,
+\begin{equation}\label{eq:Lxuv_rogers}
+  \frac{\Lxuv}{L_{\rm bol}}
+    = 10^{-3.5}\!\left(\frac{M_{\star}}{M_{\odot}}\right)^{\!-0.5}
+      \!\!\!\times
+      \begin{cases}
+        1 & t < t_{\rm sat}\\[4pt]
+        \bigl(t/t_{\rm sat}\bigr)^{-1-a_{0}} & t \ge t_{\rm sat}
+      \end{cases}
+\end{equation}
+with $a_{0} = 0.5$ and
+$t_{\rm sat} = 100\,(M_{\star}/M_{\odot})^{-1}$~Myr.  The XUV flux at
+the planet's orbital distance $a$ is then
+\begin{equation}\label{eq:Fxuv}
+  \Fxuv = \frac{\Lxuv}{4\pi\,a^{2}}\,.
+\end{equation}
+
+\paragraph{Energy-limited rate (CR16 Eq.~1).}  \citet{Lopez2013} adopt
+a bare $\Rp^{3}$ geometric factor.  CR16 replace it with the more physical
+$\Rp\,R_{\rm EUV}^{2}$ form---the EUV is \emph{absorbed} at the
+photoionisation radius $R_{\rm EUV}$ but the binding energy per gram
+is set at the optical photosphere $\Rp$---and include the tidal
+correction of \citet{Erkaev2007},
+\begin{equation}\label{eq:mdot_xuv_en}
+  \Mdot_{\rm XUV}^{\rm en\text{-}lim}
+    = \frac{\eta_{\rm XUV}(v_{\rm esc})\,
+            \pi\,F_{\rm EUV}\,\Rp\,R_{\rm EUV}^{2}}
+           {G\,\Mp\,K_{\rm tidal}(\xi)},
+\end{equation}
+where $\xi = R_{\rm Hill}/\Rp$ and the Erkaev tidal factor is
+\begin{equation}\label{eq:Ktidal}
+  K_{\rm tidal}(\xi) = 1 - \frac{3}{2\xi} + \frac{1}{2\xi^{3}}\,.
+\end{equation}
+For $\xi \to \infty$ (isolated planet) $K_{\rm tidal}\to 1$ and
+Equation~\eqref{eq:mdot_xuv_en} reduces to the standard
+energy-limited form; for close-in planets $K_{\rm tidal} < 1$ and
+mass loss is enhanced.
+
+\paragraph{Velocity-dependent heating efficiency.}  Following the
+hydrodynamic simulations of \citet{OwenJackson2012} as parametrised by
+\citet{Rogers2021},
+\begin{equation}\label{eq:eta_xuv}
+  \eta_{\rm XUV}(v_{\rm esc})
+    = \eta_{0}\!\left(\frac{v_{\rm esc}}{15\,{\rm km\,s^{-1}}}\right)^{\!\!-\alpha_{\eta}},
+  \qquad v_{\rm esc} = \sqrt{2\,G\,\Mp/\Rp}\,,
+\end{equation}
+with default $\eta_{0} = 0.1$ and $\alpha_{\eta} = 2$.  Setting
+\texttt{eta\_xuv\_velocity\_dependent = False} recovers the legacy
+constant-$\eta$ form.
+
+\paragraph{Photoionisation radius.}  $R_{\rm EUV}$ is defined as the
+radius at which the photoionisation optical depth reaches unity.
+Following \citet{MurrayClay2009} and CR16 (their Eq.~2),
+\begin{equation}\label{eq:Reuv}
+  R_{\rm EUV} \approx \Rp + H\,
+    \ln\!\left(\frac{P_{\rm photo}}{P_{\rm EUV}}\right),
+  \qquad H = \frac{k_{B}\,T_{\rm photo}}{\mu_{\rm atm}\,g_{\rm surf}}\,,
+\end{equation}
+where the photoionisation base pressure is set by
+$\sigma_{\nu_{0}}\,n_{\rm H}\,H = 1$, giving
+\begin{equation}\label{eq:Peuv}
+  P_{\rm EUV}
+    = \frac{m_{\rm H}\,G\,\Mp}{\sigma_{\nu_{0}}\,\Rp^{2}},
+  \qquad
+  \sigma_{\nu_{0}} = 6\!\times\!10^{-18}
+    \!\left(\frac{h\nu_{0}}{13.6\,{\rm eV}}\right)^{\!-3}\!{\rm cm^{2}},
+\end{equation}
+with default photon energy $h\nu_{0} = 20$~eV.  $R_{\rm EUV}$
+typically exceeds $\Rp$ by 10--50\% for sub-Neptunes; the implied
+geometric enhancement of $\sim 1.2\text{--}2.3\times$ in
+Equation~\eqref{eq:mdot_xuv_en} is the leading correction over the
+bare $\Rp^{3}$ form.
+
+\paragraph{Recombination-limited rate (Murray--Clay 2009).}  At
+$F_{\rm EUV}\gtrsim 10^{4}\,{\rm erg\,s^{-1}\,cm^{-2}}$, Lyman-$\alpha$
+radiative cooling balances photoionisation heating, the wind
+temperature saturates at $T_{\rm wind}\!\sim\!10^{4}$~K, and the
+constant-$\eta$ assumption breaks.  The full
+\citet{MurrayClay2009} expression (their Eq.~20; CR16 Eq.~3) is
+\begin{equation}\label{eq:mdot_rr}
+  \Mdot_{\rm XUV}^{\rm rr\text{-}lim}
+    = \pi\!\left(\frac{G\,\Mp}{c_{s,{\rm rr}}^{2}}\right)^{\!2}
+      c_{s,{\rm rr}}\,m_{\rm H}\,
+      \!\left(\frac{F_{\rm EUV}\,G\,\Mp}
+                   {h\nu_{0}\,\alpha_{\rm rec}\,
+                    R_{\rm EUV}^{2}\,c_{s,{\rm rr}}^{2}}\right)^{\!\!1/2}
+      \exp\!\left(2 - \frac{G\,\Mp}{c_{s,{\rm rr}}^{2}\,R_{\rm EUV}}\right),
+\end{equation}
+where $c_{s,{\rm rr}} = \sqrt{2\,k_{B}\,T_{\rm wind}/m_{\rm H}}$ is the
+sound speed of the fully-ionised wind, the factor of 2 accounting for
+protons and electrons.  This sound speed is not to be confused with the
+bolometric $c_{s} = \sqrt{k_{B}\,\Teq/\mu}$ used by the boil-off Parker
+wind.  Here $\alpha_{\rm rec} = 2.7\!\times\!10^{-13}\,{\rm cm^{3}\,s^{-1}}$
+is the case-B recombination coefficient at $T_{\rm wind} = 10^{4}$~K.
+The exponential factor encodes the gravitational suppression of the
+density at the wind launch radius and is retained in full---it varies
+by orders of magnitude across the parameter space and must not be
+linearised.
+
+\paragraph{Composite photoevaporation rate.}  The instantaneous
+photoevaporation rate is the smaller of the two regimes (CR16 \S2.3
+selection rule):
+\begin{equation}\label{eq:mdot_photoev}
+  \Mdot_{\rm photoev}
+    = \min\!\bigl(\Mdot_{\rm XUV}^{\rm en\text{-}lim},\;
+                   \Mdot_{\rm XUV}^{\rm rr\text{-}lim}\bigr).
+\end{equation}
+Both rates are evaluated and saved as diagnostics.
+
+% ======================================================================
+\section{Two-Phase Evolution}\label{sec:phases}
+% ======================================================================
+
+The mass-loss evolution is divided into two phases, following
+\citet{Tang2024}.
+
+% ----------------------------------------------------------------------
+\subsection{Boil-Off Phase}\label{subsec:boiloff}
+% ----------------------------------------------------------------------
+
+During boil-off the planet cannot contract fast enough to radiate
+away the energy deposited by the escaping wind.  The instantaneous
+rate is set by the \emph{minimum} of the three mechanisms:
+\begin{equation}\label{eq:mdot_boiloff}
+  \Mdot_{\rm boiloff}
+  = \min\!\bigl(\Mdot_{\rm parker},\;
+                \Mdot_{\rm bol},\;
+                \Mdot_{\rm int}\bigr).
+\end{equation}
+
+Two characteristic timescales govern the transition out of this phase:
+\begin{enumerate}
+  \item The \textbf{mass-loss timescale}
+        (Equation~7 of \citealt{Tang2024}):
+        \begin{equation}\label{eq:tM}
+          t_{M} = \frac{\Menv}{\Mdot}\,.
+        \end{equation}
+  \item The \textbf{Kelvin--Helmholtz contraction timescale}
+        (Equation~9 of \citealt{Tang2024}):
+        \begin{equation}\label{eq:tcool}
+          t_{\rm cool}
+          = \frac{G\,\Mcore\,\Menv}{\alpha\,\Rrcb\,L_{\rm total}}\,,
+        \end{equation}
+        where $\alpha \le 1$ is an efficiency parameter (default
+        $\alpha = 1$) and $L_{\rm total} = \Lint + L_{\rm irr}$ is the
+        total luminosity including irradiation.
+\end{enumerate}
+
+\subsection{Phase Transition}\label{subsec:transition}
+
+The planet exits the boil-off phase when the contraction timescale
+drops below the mass-loss timescale:
+\begin{equation}\label{eq:transition}
+  t_{M} \ge t_{\rm cool}\,.
+\end{equation}
+Once this condition is met (and $t > 0$), the code transitions
+irreversibly to the post-boil-off phase.
+
+% ----------------------------------------------------------------------
+\subsection{Core-Powered Mass Loss}\label{subsec:cpml}
+% ----------------------------------------------------------------------
+
+In the post-boil-off regime, an additional channel can drive escape
+even when the stellar XUV flux is exhausted.  The planet's own
+internal cooling luminosity launches a transonic Bondi-like wind from
+above the RCB.  This \emph{core-powered mass loss} (CPML) was
+introduced by \citet{Ginzburg2016, Ginzburg2018} and refined by
+\citet{Gupta2019, Rogers2021}.  \orchard{} implements both competing
+forms of the energy-limited cap and selects between them by user flag
+\texttt{cpml\_energy\_limit}.
+
+\paragraph{Bondi (sonic-point) rate.}  Following
+\citet[][their Eq.~6]{Gupta2019} and \citet[][their Eq.~16]{Rogers2021},
+\begin{equation}\label{eq:mdot_bondi}
+  \Mdot_{B}
+    = 4\pi\,R_{s}^{2}\,\rho_{s}\,c_{s,B}
+    = 4\pi\,R_{s}^{2}\,\rho_{\rm rcb}\,c_{s,B}\,
+      \exp\!\left(-\,\frac{G\,\Mp}{c_{s,B}^{2}\,\Rrcb}\right),
+\end{equation}
+where the bolometric (\emph{not} XUV) sound speed is
+$c_{s,B} = \sqrt{k_{B}\,\Teq/\mu}$ with $\mu = 2.35\,m_{\rm H}$ for
+solar-composition H/He.  The sonic radius is
+$R_{s} = G\,\Mp/(2\,c_{s,B}^{2})$.  The exponential factor encodes the
+hydrostatic extension from the RCB to the sonic point.  In cool, massive
+planets ($G\Mp/c_{s,B}^{2}\Rrcb \gg 1$) it is suppressed by orders
+of magnitude, and such planets are stable.  Hot, low-mass planets are
+exponentially unstable.
+
+\paragraph{Energy-limited cap (two competing forms).}  An active
+debate in the literature concerns which luminosity sets the
+energy-limited ceiling.  \orchard{} supports both:
+
+\begin{itemize}
+  \item \texttt{cpml\_energy\_limit = gss18}: the form of
+        \citet{Ginzburg2018, Gupta2019, Rogers2021}, in which the
+        \emph{interior cooling luminosity} provides the energy to
+        lift gas out of the well at $\Rp$,
+        \begin{equation}\label{eq:mdot_E_gss18}
+          \Mdot_{E}^{\rm gss18}
+            = \frac{\Lint}{g\,\Rp}\,.
+        \end{equation}
+  \item \texttt{cpml\_energy\_limit = tang24} (default): the
+        re-assessment of \citet{Tang2024}, who argue that the
+        radiative atmosphere re-equilibrates on a turnover timescale
+        much shorter than the wind timescale.  The \emph{bolometric}
+        flux then supplies $PdV$ work in the radiative zone, and the
+        cap becomes
+        \begin{equation}\label{eq:mdot_E_tang24}
+          \Mdot_{E}^{\rm tang24}
+            = \frac{L_{\rm bol}}{G\Mp/\Rrcb}\,,
+        \end{equation}
+        identical in form to Equation~\eqref{eq:mdot_bol}.
+\end{itemize}
+
+The composite CPML rate is the smaller of the two channels:
+\begin{equation}\label{eq:mdot_cpml}
+  \Mdot_{\rm cpml}
+    = \min\!\bigl(\Mdot_{B},\,\Mdot_{E}^{\rm chosen}\bigr).
+\end{equation}
+The two flag settings can yield CPML rates that differ by factors of
+3--10$\times$ depending on the planet, and they predict materially
+different post-boil-off histories.  \citet{Tang2024} argue their
+bolometric form predicts that CPML alone removes only $\sim 0.1\%$ of
+envelope mass on Gyr timescales for sub-Neptunes---contradicting the
+\citet{Ginzburg2018} picture that CPML produces the radius gap on its
+own.  Exposing both forms as a flag lets users reproduce either
+literature result.
+
+% ----------------------------------------------------------------------
+\subsection{Post-Boil-Off Phase}\label{subsec:postboiloff}
+% ----------------------------------------------------------------------
+
+After the boil-off--to--post-boil-off transition (Section~\ref{subsec:transition}),
+the planet can contract and cool efficiently.  Three competing channels
+are evaluated and the largest sets the wind rate:
+\begin{equation}\label{eq:mdot_postbo}
+  \Mdot_{\rm post}
+    = \max\!\Bigl(\,
+        \min\!\bigl(\Mdot_{\rm parker},\,\Mdot_{\rm bol},\,\Mdot_{\rm int}\bigr),
+        \;
+        \Mdot_{\rm photoev},
+        \;
+        \Mdot_{\rm cpml}
+      \Bigr).
+\end{equation}
+The ``boil-off-style minimum'' term is included for continuity through
+the phase transition; it reduces to the Parker rate alone for
+energetically decoupled (radiatively contracted) planets.  In practice
+either $\Mdot_{\rm photoev}$ (early post-boil-off, while XUV is
+saturated) or $\Mdot_{\rm cpml}$ (late, after XUV decay) dominates.
+The $\max$ rule selects whichever channel is currently active.
+
+A global efficiency parameter $\eta_{\rm ml}$ (default 1) multiplies
+the final rate in both phases:
+\begin{equation}\label{eq:eta}
+  \Mdot = \eta_{\rm ml}\,\Mdot_{\rm phase}\,.
+\end{equation}
+
+% ----------------------------------------------------------------------
+\subsection{Advective Energy Loss}\label{subsec:Ladv}
+% ----------------------------------------------------------------------
+
+The escaping wind carries away enthalpy at a rate
+\citep[Equation~2 of][]{Tang2024}
+\begin{equation}\label{eq:Ladv}
+  \Ladv = \frac{\gamma}{\gamma - 1}\,\Mdot\,\cs^{2}\,,
+\end{equation}
+where $\gamma$ is the adiabatic index (default $\gamma = 7/5$).
+This advective luminosity is tracked as a diagnostic but is not
+currently fed back into the interior energy budget.
+
+% ======================================================================
+\section{Grid Adjustment and Structural Response}\label{sec:grid}
+% ======================================================================
+
+After computing $\Mdot$, the Lagrangian mass grid is updated
+self-consistently to reflect the loss of envelope material.
+
+% ----------------------------------------------------------------------
+\subsection{Uniform Envelope Scaling}\label{subsec:scaling}
+% ----------------------------------------------------------------------
+
+The mass lost during one timestep $\Delta t$ is
+\begin{equation}\label{eq:dM}
+  \Delta M = \Mdot\,\Delta t\,.
+\end{equation}
+A safety cap limits the fractional loss per step:
+\begin{equation}
+  \Delta M \le f_{\rm max}\,\Menv\,,
+\end{equation}
+where $f_{\rm max}$ is the maximum fractional loss per timestep (default
+$f_{\rm max} = 0.01$, i.e., 1\%).
+A minimum envelope mass floor $\Menv^{\rm min} = f_{\rm floor}\,\Mp$
+(default $f_{\rm floor} = 10^{-6}$) prevents complete stripping.
+
+The cell masses $\delta m_{k}$ in the envelope ($k < k_{\rm core}$) are
+then rescaled uniformly:
+\begin{equation}\label{eq:scale}
+  \delta m_{k} \leftarrow \delta m_{k}
+    \times \frac{\Menv - \Delta M}{\Menv}\,,
+  \qquad k = 0,1,\ldots,k_{\rm core}-1\,.
+\end{equation}
+The mass-shell boundaries $m_{b}$ are reconstructed by summing the
+updated cell masses inward from the surface:
+\begin{equation}
+  m_{b,k} = m_{b,k+1} + \delta m_{k}\,,
+  \qquad k = N{-}1,\,N{-}2,\,\ldots,\,0\,.
+\end{equation}
+
+This uniform-scaling approach preserves the relative grid spacing
+and prevents mismatches with the hydrostatic and transport solvers
+that would arise from removing outer shells.
+
+% ----------------------------------------------------------------------
+\subsection{Hydrostatic Re-equilibration}\label{subsec:hse}
+% ----------------------------------------------------------------------
+
+With the updated mass grid, the Henyey relaxation solver
+recomputes the profiles $P(m)$, $r(m)$, $\rho(m)$, and $T(m)$ by
+simultaneously satisfying mass continuity,
+\begin{equation}
+  \frac{\dd r}{\dd m} = \frac{1}{4\pi\,r^{2}\,\rho}\,,
+\end{equation}
+and hydrostatic equilibrium (including centrifugal support from
+rigid-body rotation at angular velocity $\Omega$),
+\begin{equation}
+  \frac{\dd P}{\dd m}
+  = -\frac{G\,m}{4\pi\,r^{4}}
+    + \frac{\Omega^{2}}{6\pi\,r}\,,
+\end{equation}
+using the Newton--Raphson iteration on $(\ln P,\,\ln r)$ described in the
+companion hydrostatic-methods writeup.
+
+The planetary radius $\Rp = r_{b,0}$ (outermost shell boundary)
+decreases naturally as $\Menv$ shrinks.  This decrease feeds back into
+the next evaluation of $\Mdot_{\rm XUV}$ and the energy-limited rates.
+
+% ----------------------------------------------------------------------
+\subsection{Timestep Constraints}\label{subsec:timestep}
+% ----------------------------------------------------------------------
+
+When mass loss is active, the evolutionary timestep is additionally
+constrained by the mass-loss timescale to ensure numerical stability:
+\begin{equation}
+  \Delta t \le C_{\rm ml}\,\frac{\Menv}{\Mdot}\,,
+\end{equation}
+where $C_{\rm ml}$ is a Courant-like safety factor (default $C_{\rm ml}
+\sim 0.01$), consistent with the cap in Equation~\eqref{eq:dM}.
+
+% ----------------------------------------------------------------------
+\subsection{Small-Timestep Ramp}\label{subsec:ramp}
+% ----------------------------------------------------------------------
+
+In runs that begin from a hot, puffy initial state (e.g., $S_{\rm
+ini}\!\sim\!9\,k_{B}/{\rm baryon}$), the mass-loss timescale at full
+$\Mdot$ can be very short ($\sim 10^{4}$~yr) compared with the
+\orchard{} timestepper's initial probe step ($\Delta t \sim
+10^{-12}$~Myr).  Applying the full $\Mdot$ at such a small $\Delta t$
+produces $\Mdot\,\Delta t \ll \Menv$, but couples a large physical
+$\Mdot$ to a numerically tiny step.  Convergence slows, and the rezone
+step's hydrostatic re-equilibration is stressed.  Following
+\texttt{MESA}'s \texttt{mass\_change\_full\_on\_dt} /
+\texttt{\_full\_off\_dt} controls \citep{Paxton2011}, we suppress the
+applied $\Mdot$ by a smooth ramp at small $\Delta t$:
+\begin{equation}\label{eq:ramp}
+  \Mdot_{\rm applied}
+    = R(\Delta t)\,\Mdot_{\rm raw},
+  \qquad
+  R(\Delta t) =
+    \begin{cases}
+      0
+      & \Delta t \le \Delta t_{\rm off}\,,\\[4pt]
+      \tfrac{1}{2}\!\bigl[1 - \cos\!\bigl(\pi\,u\bigr)\bigr]
+      & \Delta t_{\rm off} < \Delta t < \Delta t_{\rm on}\,,\\[4pt]
+      1
+      & \Delta t \ge \Delta t_{\rm on}\,,
+    \end{cases}
+\end{equation}
+with
+$u = \log(\Delta t / \Delta t_{\rm off}) / \log(\Delta t_{\rm on} /
+\Delta t_{\rm off})$.  Defaults are
+$\Delta t_{\rm off} = 10^{2}\,{\rm s}$ and
+$\Delta t_{\rm on} = 10^{4}\,{\rm s}$.
+
+\paragraph{Self-stabilising rezone near the strip floor.}  The ramp
+also stabilises the run as $\Menv$ approaches the floor
+$\Menv^{\rm min} = f_{\rm floor}\,\Mp$.  As $\Menv\to\Menv^{\rm min}$
+the timestep cap $\Delta t_{\rm ml} = f_{\rm max}\,\Menv/\Mdot$ would
+collapse without bound.  In practice $\Delta t$ falls below
+$\Delta t_{\rm on}$, $R(\Delta t) \to 0$, and $\Mdot_{\rm applied}\to
+0$.  The thermal-evolution cap (\texttt{max\_step}) then takes over and
+the run continues without further envelope erosion---this is how the
+rock\_gray boundary condition gracefully degenerates to a stripped
+super-Earth state when the original sub-Neptune envelope is exhausted.
+
+The dt cap uses the \emph{ramped} $\Mdot$ (not $\Mdot_{\rm raw}$) so
+that the cap relaxes consistently with $\Mdot_{\rm applied}\to 0$.
+
+% ======================================================================
+\section{Radiative--Convective Boundary}\label{sec:rcb}
+% ======================================================================
+
+All mass-loss rate prescriptions require thermodynamic conditions at the
+radiative--convective boundary.  In \orchard{}, the RCB is identified as
+the outermost envelope cell (cell index $k = 0$).  The function
+\texttt{find\_rcb()} returns
+\begin{equation}
+  \Rrcb = r_{b,0}\,,\quad
+  \rho_{\rm rcb} = \rho_{0}\,,\quad
+  P_{\rm rcb} = P_{0}\,,
+\end{equation}
+i.e., the radius, density, and pressure at the top of the model grid.
+This identification is appropriate for sub-Neptunes in which the
+envelope becomes optically thin near the outermost model cell.
+
+% ======================================================================
+\section{Diagnostic Outputs}\label{sec:diagnostics}
+% ======================================================================
+
+At each snapshot, the code records the following mass-loss
+diagnostics in the HDF5 output (also written to plain-text logs):
+\begin{itemize}
+  \item $\Mdot$, $\Mdot_{\rm raw}$ --- the applied mass-loss rate
+        and the un-ramped, un-globally-scaled physical rate
+        [g\,s$^{-1}$].
+  \item $\Mdot_{\rm XUV}^{\rm en\text{-}lim}$,
+        $\Mdot_{\rm XUV}^{\rm rr\text{-}lim}$ --- the two
+        photoevaporation channels of
+        Equations~\eqref{eq:mdot_xuv_en} and \eqref{eq:mdot_rr}.
+  \item $\Mdot_{B}$, $\Mdot_{E}^{\rm chosen}$,
+        $\Mdot_{\rm cpml}$ --- the Bondi rate, energy-limited cap, and
+        composite CPML rate of Equations~\eqref{eq:mdot_bondi},
+        \eqref{eq:mdot_E_gss18}/\eqref{eq:mdot_E_tang24}, and
+        \eqref{eq:mdot_cpml}.
+  \item $R_{\rm EUV}$, $K_{\rm tidal}$, $\eta_{\rm XUV}$ --- the CR16
+        photoionisation radius, Erkaev tidal factor, and instantaneous
+        velocity-dependent efficiency.
+  \item $\Menv$, $\Mp$ --- envelope and total planet mass [g].
+  \item $\Ladv$ --- advective luminosity [erg\,s$^{-1}$].
+  \item $\dot E_{\rm wind} = \Mdot_{\rm wind}
+        \bigl[h_{\rm surf} + \tfrac{1}{2}v_{\rm wind}^{2} - GM/R\bigr]$
+        --- the wind-energy bookkeeping term of
+        Equation~\eqref{eq:Eledger}, used as a global
+        energy-conservation diagnostic.
+  \item the ramp factor of Section~\ref{subsec:ramp}.
+  \item the current evolutionary phase (boil-off or post-boil-off).
+\end{itemize}
+These permit \emph{ex post} verification of the energy ledger
+\eqref{eq:Eledger} and isolation of which physics channel dominates
+at any given epoch.
+
+% ======================================================================
+\section{Summary of Configuration Parameters}\label{sec:params}
+% ======================================================================
+
+Table~\ref{tab:params} lists the user-configurable parameters that
+control the mass-loss module.
+
+\begin{deluxetable}{llc}
+\tablecaption{Mass-loss configuration parameters.\label{tab:params}}
+\tablecolumns{3}
+\tablehead{
+  \colhead{Parameter} &
+  \colhead{Description} &
+  \colhead{Default}
+}
+\startdata
+\texttt{mass\_loss}       & Enable/disable mass loss           & False   \\
+\texttt{mu\_wind\_amu}    & Mean molecular weight [amu]        & 2.35    \\
+\texttt{gamma\_wind}      & Adiabatic index $\gamma$           & 1.4     \\
+\texttt{alpha\_kh}        & KH efficiency $\alpha$             & 1.0     \\
+\texttt{eta\_mass\_loss}  & Global efficiency $\eta_{\rm ml}$  & 1.0     \\
+\texttt{eta\_xuv}         & XUV efficiency $\eta_{\rm XUV}$    & 0.1     \\
+\texttt{L\_star\_ml}      & Stellar luminosity [$L_\odot$]     & ---     \\
+\texttt{t\_sat\_xuv}      & XUV saturation time [Myr]          & 100     \\
+\texttt{min\_envelope\_fraction} & $f_{\rm floor}$              & $10^{-6}$\\
+\texttt{max\_dm\_frac}    & $f_{\rm max}$                      & 0.01    \\
+\texttt{initial\_phase}   & Starting phase                     & boiloff \\
+\enddata
+\end{deluxetable}
+
+\bibliography{references}
+\bibliographystyle{aasjournalv7}
+
+\end{document}
