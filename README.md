@@ -13,7 +13,7 @@ v0.2.0 is the first fully open release of ORCHARD. The previous version (v0.1.0,
 - **Metal (Z) rain**: a heavy-element miscibility channel paralleling helium rain — selectable miscibility curves, independent temperature/pressure offsets, supersaturation-responsive rain-zone diffusion, and a deep-pressure activation cap (`zmisc_p_max`).
 - **Concentric Maclaurin Spheroid (CMS) gravity backend** for gravitational harmonics, alongside the Theory of Figures; corrected moment-of-inertia integral in TOF4; J6 now computed and plotted.
 - **Double-diffusive (Spruit-type) full-Ledoux semiconvection option** for composition-gradient transport.
-- **Rock-fraction-aware EOS support (EOS v2)**: aquarock water-rock core EOS, continuous water/rock core composition (`f_rock_core`), rock-mixture envelope options; fixed core EOS evaluation for rock fractions other than 0.5.
+- **Rock-fraction-aware EOS support ([EOS v2.0](https://doi.org/10.5281/zenodo.21812109))**: aquarock water-rock core EOS, continuous water/rock core composition (`f_rock_core`), rock-mixture envelope options; fixed core EOS evaluation for rock fractions other than 0.5.
 - **More robust initial models**: the RK4 initial-structure builder handles cored gas giants; fixed an RK4 substep density bug; fixed the rotating-initialization breakup check.
 - **New convection and irradiation options**: composition overshoot (Herwig-style), smoothed convection criterion, experimental convective entrainment and rotation-modified convective velocities (Fuentes et al. 2023), extrapolated-endpoint stellar irradiation penetration.
 - **Energy-accounting overhaul**: consistent lost-energy ledger, rotational kinetic energy tracked, optional midpoint gravity centering in the hydrostatic solver, optional second-order time-centered heat metering, plus an energy-conservation methods writeup.
@@ -45,7 +45,7 @@ conda activate orchard_env
 python setup_eos.py
 ```
 
-`setup_eos.py` downloads the ~30 GB of equation-of-state tables from the [EOS Zenodo record](https://doi.org/10.5281/zenodo.10659248). No additional manual downloads are required.
+`setup_eos.py` downloads the ~30 GB of equation-of-state tables from the [EOS Zenodo record](https://doi.org/10.5281/zenodo.10659248). That link is the permanent *concept* DOI: `setup_eos.py` resolves it to the newest published version at download time, currently **EOS v2.0** ([10.5281/zenodo.21812109](https://doi.org/10.5281/zenodo.21812109)). No additional manual downloads are required, and the command does not change when a new EOS version is deposited.
 
 ### Install from GitHub (developers)
 
@@ -53,7 +53,7 @@ To clone the source repository directly instead:
 
 ```bash
 GIT_LFS_SKIP_SMUDGE=1 git clone --recurse-submodules https://github.com/robtejada/orchard-public.git
-cd orchard
+cd orchard-public
 conda env create -f environment.yaml
 conda activate orchard_env
 python setup_eos.py
