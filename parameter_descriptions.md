@@ -129,10 +129,6 @@ The list below provides brief descriptions of the model parameters in `parameter
 - `C_MoI` `[float]`: Sets the dimensionless moment-of-inertia factor used by the ToF correction (`I = C_MoI * M * R^2`). Default is Jupiter's value (0.26393) from Militzer & Hubbard (2023). Saturn (0.2181) and other planets have their own values in the literature.
 - `period` `[int]`: Sets the rotation period in seconds, which matters when `rotation` and/or `tof_calc` are enabled because it determines the angular velocity. Jupiter: 35730 s, Saturn: 38014 s, Uranus: 62064 s, Neptune: 57996 s.
 - `env_s_start` `[bool]`: If `True`, the mantle entropy starts continuously from the envelope (recommended for gas giants); if `False`, the mantle entropy is set explicitly by `[core].mantle_entropy` (recommended for sub-Neptunes and super-Earths).
-- `tof_order` `[int]`: Theory-of-Figures order for gravity harmonics and figure computation. `4` (default): Nettelmann 2017 ToF4, computes J_2..J_8. `7`: Nettelmann 2021 ToF7, computes J_2..J_14 with ~1e-5 precision on J_2.
-- `gravity_method` `[str]`: Gravity backend for harmonics computation. `'tof'` (default): ToF4/ToF7 per `tof_order`. `'cms'`: Concentric Maclaurin Spheroids (nonperturbative, matches Militzer & Hubbard 2024, but much slower; use as a validation backend, not in the inner evolution loop).
-- `cms_kmax` `[int]`: Harmonic order for the CMS gravity backend. Used only when `gravity_method = cms`.
-- `cms_nmu` `[int]`: Number of Gauss-Legendre latitude nodes for the CMS gravity backend. Used only when `gravity_method = cms`.
 
 #### `[transport]`
 
@@ -147,18 +143,11 @@ The list below provides brief descriptions of the model parameters in `parameter
 - `hinge_k` `[float]`: Sharpness parameter for the softplus hinge function. Lower `k` gives a smoother transition; default `1e7` is very sharp (nearly identical to hard max).
 - `tol_flux` `[float]`: Sets the relative flux-convergence tolerance used by the high-precision transport mode (`[general].high_precision = True`), where smaller values demand closer flux matching.
 - `debug_transport_NR` `[bool]`: Prints per-iteration NR diagnostics (step error, residual norms, worst variable) and other transport Jacobian debugging output. Default `False`.
-- `rotational_convection` `[bool]`: Enables rotation-modified inviscid convection following Fuentes, Anders, Cumming & Hindman 2023, ApJL 950 L4. Multiplies `v_MLT`, the convective heat flux, the MLT composition diffusivity, and the smooth-Ledoux Schwarzschild diffusivity by `R(Ro_NR) = Ro_NR / (1 + Ro_NR^5)^(1/5)` on envelope boundaries (`i < kcore`), where `Ro_NR = v_NR / (2 Ω H_p)` is the non-rotating Rossby number. Asymptotes to 1 for slow rotation (Ro_NR >> 1) and to Ro_NR^(1/5) for rapid rotation (Coriolis-Inertial-Archimedean limit). Has no effect unless `[hydrostatic_equilibrium].rotation = True` with a defined rotation period; the viscous mantle convection regime is left untouched.
-- `convective_entrainment` `[bool]`: Enables convective entrainment at the Schwarzschild/Ledoux boundary following Fuentes et al. 2023 ApJL 950 L4 Eq. 5 (Linden 1975 entrainment hypothesis). Adds an effective boundary diffusivity `D_ent = v_ent · ξ_b · Δr_b` where `v_ent = 2 U_conv³ / (N_C² h²)` is the entrainment velocity from energy balance, `N_C²` is the compositional Brunt-Väisälä squared, `h` is the convective-zone thickness above the boundary, and `ξ_b = |∂σ/∂r|` is a smooth boundary localizer. When combined with `rotational_convection = True`, `U_conv` carries the rotation factor `R(Ro_NR)` so `v_ent ∝ U_conv³` automatically inherits a `R³ ≈ 200×` reduction at Jovian rotation rates, reproducing Fuentes' fuzzy-core preservation timescale.
-- `entrainment_bracket_scale` `[float]`: Smoothing width for the convective-vs-stable indicator used in `convective_entrainment`. Set to a fraction of the typical bulk-envelope bracket value (~10⁻¹⁰–10⁻¹¹ in cgs); if ≤ 0, auto-calibrated per timestep as the 25th percentile of the positive bracket distribution.
-- `entrainment_NC2_floor` `[float]`: Hard floor (s⁻²) on the compositional Brunt-Väisälä squared used in the `v_ent` denominator. Prevents division blow-up in already-mixed regions; default `1e-12`.
+- `lag_bc_jacobian` `[bool]`: Treats the surface boundary-condition Jacobian coupling (`dTint/dS`, `dTint/dY`, `dTint/dZ`) as lagged/Picard. The surface-loss residual uses the step-start `T_int` (explicit within each transport solve), so the consistent Jacobian contribution is zero and this never changes a converged solution — only the Newton trajectory. Set `True` when the accelerated implicit coupling destabilizes the solver, e.g. `radiation = False` ice-giant models at the surface-convection shutoff. Default `False`.
 - `smooth_convection_criterion` `[bool]`: Replaces the hard "if bracket > 0 then `D_mlt` else `D_micro`" gate with a smooth sigmoid blend `D_b = σ_conv · D_mlt + D_micro`, where `σ_conv` is built from the raw (pre-softhinge) bracket. Eliminates the discrete-cell "staircase" artifact in composition gradients at convective/stable boundaries. Default `False`.
 - `smooth_conv_k` `[float]`: Sharpness of the smooth-convection sigmoid. Large `k` (>>1) recovers the hard-step limit; small `k` (~1) gives a very gradual transition. Default `10` is moderately sharp.
 - `smooth_conv_scale` `[float]`: Bracket scale used to non-dimensionalize the smooth-convection sigmoid argument. If ≤ 0, auto-calibrated per timestep as the 25th percentile of the positive bracket distribution.
 - `smooth_conv_bracket_sigma` `[float]`: Gaussian smoothing width (in cells) applied to `bracket_raw` before computing `σ_conv`. This is the key knob that breaks the composition-gradient staircase: spatial smoothing of 1.5–3 cells makes adjacent cells get similar diffusivity values so the transition is graded. Set to `0` to disable. Default `2.0`.
-- `composition_overshoot` `[bool]`: Adds a Herwig 2000 / Freytag 1996 style overshoot diffusivity to the composition equation at every convective/stable transition. `D_ov(r) = composition_overshoot_factor · D_mlt(r_b) · exp(−(r_b − r) / (composition_overshoot_fhp · H_p))` decays exponentially from the boundary into the stable cells. When combined with `rotational_convection = True` and `composition_overshoot_rotation_couple = True`, the overshoot prefactor is internally multiplied by `R³` to inherit the Fuentes rotation suppression. Default `False`.
-- `composition_overshoot_factor` `[float]`: Base prefactor for the overshoot diffusivity. `D_ov_max = factor · D_mlt(r_b)`. For Jovian conditions, `factor ~ 1e-10` gives D_ov ~ 1 cm²/s and Gyr-timescale erosion matching Fuentes 2023 expectations. Default `1e-10`.
-- `composition_overshoot_fhp` `[float]`: Penetration scale in pressure-scale-height units. `D_ov` decays by `1/e` over `f_hp · H_p` of penetration depth. Default `0.5`.
-- `composition_overshoot_rotation_couple` `[bool]`: When `True`, multiplies the overshoot prefactor by `R(Ro_NR)³` at each boundary, inheriting the Fuentes rotation-suppression factor from `F_K ∝ U_conv³`. Default `True`.
 - `semiconvection` `[bool]`: Enables semiconvective transport in Ledoux-stable but Schwarzschild-unstable regions. Numerically sensitive/WIP; use with caution.
 - `sc_zones_min` `[int]`: Minimum number of consecutive Schwarzschild-unstable / Ledoux-stable zones required for a region to qualify as semiconvective; filters single-zone noise.
 - `Nu_T` `[float]`: Thermal Nusselt number for semiconvective regions (used only when `semiconvection = True`), setting the strength of semiconvective heat transport. Default `10`.
@@ -253,22 +242,6 @@ The list below provides brief descriptions of the model parameters in `parameter
 - `mantle_entropy` `[float]`: Sets the initial mantle entropy (k_B per baryon) when `env_s_start = False`, allowing a discontinuous envelope-to-mantle entropy setup.
 - `core_entropy` `[float]`: Sets the initial core entropy (k_B per baryon). If no mantle layer exists (i.e., `mass_core_fe == mass_core`), this value is also applied to the core.
 - `fe_core_offset` `[float]`: Adds an entropy offset between mantle and core (k_B per baryon); a small positive value seeds extra initial heat in the iron core.
-
-#### `[mass_loss]`
-
-** NOTE **: Currently not available in this version of ORCHARD.
-
-- `mass_loss` `[bool]`: Enables atmospheric mass loss (Parker wind boil-off + XUV photoevaporation). When `False` (default), mass loss is completely disabled. Only relevant for sub-Neptunes and super-Earths subject to stellar irradiation.
-- `mu_wind_amu` `[float]`: Mean molecular weight of escaping gas in amu. Default `2.35` for solar H/He.
-- `gamma_wind` `[float]`: Adiabatic index for the wind energy budget.
-- `alpha_kh` `[float]`: Alpha parameter for the Kelvin-Helmholtz contraction timescale (Eq. 9 of Tang et al. 2024; ≤ 1).
-- `eta_mass_loss` `[float]`: Global mass-loss efficiency multiplier; scales all Mdot by this factor.
-- `eta_xuv` `[float]`: XUV photoevaporation heating efficiency (dimensionless; typically 0.1–0.3).
-- `L_star` `[float]`: Stellar bolometric luminosity in solar units, used for XUV luminosity calculation.
-- `t_sat_xuv` `[float]`: XUV saturation timescale (Myr). Before this age, `L_xuv = f_sat * L_star`.
-- `min_envelope_fraction` `[float]`: Minimum envelope mass fraction (M_env / M_planet) below which mass loss is turned off to prevent numerical issues with vanishing envelopes.
-- `max_dm_frac` `[float]`: Maximum fractional envelope mass change per timestep; safety cap to prevent runaway mass loss.
-- `initial_phase` `[str]`: Initial mass-loss phase: `'boiloff'` or `'post_boiloff'`.
 
 #### `[regrid]`
 

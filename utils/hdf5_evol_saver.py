@@ -272,17 +272,6 @@ class H5EvolutionWriter:
                     raise ValueError(f"Expected 1D array for '{name}', got shape {arr.shape}")
                 self._ensure_2d_series(name, arr.size, self.float_dtype)
 
-            # Create optional scalar datasets before finalizing layout
-            optional_scalars = ["Mdot", "M_env", "M_planet_current", "L_adv", "total_mass_lost"]
-            for k in optional_scalars:
-                if k in snap and k not in self.f:
-                    self.f.create_dataset(
-                        k, shape=(0,), maxshape=(None,),
-                        dtype=self.float_dtype,
-                        compression=self.compression,
-                        shuffle=self._shuffle(),
-                    )
-
             # Now safe to enable SWMR
             self._finalize_layout(enable_swmr=self._swmr_requested)
 
@@ -299,17 +288,6 @@ class H5EvolutionWriter:
             if n_prev < i:
                 d[n_prev:i] = np.nan
             d[i] = snap[k]
-
-        # Optional scalar series (mass loss, etc.)
-        optional_scalars = ["Mdot", "M_env", "M_planet_current", "L_adv", "total_mass_lost"]
-        for k in optional_scalars:
-            if k in snap and k in self.f:
-                d = self.f[k]
-                n_prev = int(d.shape[0])
-                d.resize((i + 1,))
-                if n_prev < i:
-                    d[n_prev:i] = np.nan
-                d[i] = snap[k]
 
         # Energies
         self.f["energies"].resize((i + 1, 5))

@@ -277,7 +277,7 @@ def new_MoI(s_values, rho_values, s0_values, s2_values, s4_values,
     the figure functions are needed. In the constant-density limit the
     radial integral telescopes to the boundary-only value, recovering the
     homogeneous-body invariant I/(M R_eq^2) = 2/5 to ToF truncation error.
-    Matches TOF7's _compute_MoI (by-parts form) to <~1e-7 relative.
+    Matches the Nettelmann (2021) by-parts MoI form to <~1e-7 relative.
     """
     mu = _MOI_GL_NODES              # shape (M,)
     w  = _MOI_GL_WEIGHTS            # shape (M,)

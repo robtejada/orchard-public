@@ -13,7 +13,6 @@ Plot modes:
     age_plot()                - Multi-age comparison with colormap encoding
     movie_evol_plots_by_age() - Sequential frames for animation (compiled via ffmpeg)
     debug_plot()              - 12-panel diagnostic for transport debugging
-    mass_loss_plot()          - 4-panel atmospheric escape diagnostic
 
 Standard panels include:
     - P-T diagram with silicate/iron melting curves and phase boundaries
@@ -119,7 +118,6 @@ class init_plot:
         age_plot()                - Multi-age comparison with colormap encoding
         movie_evol_plots_by_age() - Sequential frames for animation
         debug_plot()              - 12-panel transport diagnostic
-        mass_loss_plot()          - 4-panel atmospheric escape diagnostic
 
     Parameters
     ----------
@@ -250,11 +248,6 @@ class init_plot:
         self.mantle_phases = []
 
         self.luminosity = []
-
-        self.Mdot = []
-        self.M_env = []
-        self.M_planet_current = []
-        self.L_adv = []
 
         self.melt_fraction = []
         loader = load_models.ModelSet(paths=paths, verbose=False, read_verbose=read_verbose)
@@ -396,12 +389,6 @@ class init_plot:
             if d["deltaE"] is not None: self.deltaE.append(d["deltaE"])
             if d["dE_S"]   is not None: self.dE_S.append(d["dE_S"])
             if d["energy"] is not None: self.energy.append(d["energy"])
-
-            # Mass-loss data (optional)
-            self.Mdot.append(d.get("Mdot"))
-            self.M_env.append(d.get("M_env"))
-            self.M_planet_current.append(d.get("M_planet_current"))
-            self.L_adv.append(d.get("L_adv"))
 
         self.age_gyr = np.array(self.data_age[-1])*const.s_to_Gyr
 
@@ -2723,80 +2710,3 @@ class init_plot:
 
         # Restore LaTeX setting
         plt.rc('text', usetex=_prev_usetex)
-
-    def mass_loss_plot(self, output_file='mass_loss', labels=None,
-                       model_indices=None, log_age=True, save=True,
-                       save_path=None, cmap=None, leg_size=12):
-        """
-        Diagnostic plot of atmospheric mass-loss evolution.
-
-        Creates a 2x2 panel figure with:
-        - Mdot(t)  [g/s]
-        - M_env(t) [Earth masses]
-        - M_planet(t) [Earth masses]
-        - L_adv(t) [erg/s]
-        """
-        if model_indices is None:
-            model_indices = range(len(self.paths))
-        if labels is None:
-            labels = [os.path.basename(p) for p in self.paths]
-        if cmap is None:
-            cmap = plt.cm.tab10
-
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        ax_mdot, ax_menv = axes[0]
-        ax_mpl, ax_ladv = axes[1]
-
-        for idx, j in enumerate(model_indices):
-            if self.Mdot[j] is None:
-                continue
-            color = cmap(idx % 10)
-            age_gyr = np.asarray(self.data_age[j]) * const.s_to_Gyr
-            mdot = np.asarray(self.Mdot[j])
-            m_env = np.asarray(self.M_env[j]) / const.mearth
-            m_pl = np.asarray(self.M_planet_current[j]) / const.mearth
-            l_adv = np.asarray(self.L_adv[j])
-
-            # Ensure arrays match in length (trim to shortest)
-            n = min(len(age_gyr), len(mdot), len(m_env), len(m_pl), len(l_adv))
-            age_gyr = age_gyr[:n]
-            mdot = mdot[:n]
-            m_env = m_env[:n]
-            m_pl = m_pl[:n]
-            l_adv = l_adv[:n]
-
-            lbl = labels[idx] if idx < len(labels) else None
-            plot_fn = ax_mdot.loglog if log_age else ax_mdot.semilogy
-            plot_fn(age_gyr, mdot, color=color, label=lbl)
-
-            if log_age:
-                ax_menv.semilogx(age_gyr, m_env, color=color)
-                ax_mpl.semilogx(age_gyr, m_pl, color=color)
-                ax_ladv.loglog(age_gyr, l_adv, color=color)
-            else:
-                ax_menv.plot(age_gyr, m_env, color=color)
-                ax_mpl.plot(age_gyr, m_pl, color=color)
-                ax_ladv.semilogy(age_gyr, l_adv, color=color)
-
-        ax_mdot.set_ylabel(r'$\dot{M}$ [g/s]')
-        ax_mdot.set_xlabel('Age [Gyr]')
-        ax_mdot.legend(fontsize=leg_size)
-
-        ax_menv.set_ylabel(r'$M_{\rm env}$ [$M_\oplus$]')
-        ax_menv.set_xlabel('Age [Gyr]')
-
-        ax_mpl.set_ylabel(r'$M_{\rm planet}$ [$M_\oplus$]')
-        ax_mpl.set_xlabel('Age [Gyr]')
-
-        ax_ladv.set_ylabel(r'$L_{\rm adv}$ [erg/s]')
-        ax_ladv.set_xlabel('Age [Gyr]')
-
-        fig.suptitle('Atmospheric Mass Loss Diagnostics', fontsize=14)
-        fig.tight_layout(rect=[0, 0, 1, 0.96])
-
-        if save:
-            path = save_path or (output_file + '.pdf')
-            fig.savefig(path, dpi=150)
-            plt.close(fig)
-        else:
-            plt.show()

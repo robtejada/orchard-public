@@ -263,19 +263,6 @@ eddy_overshoot_fhp = float(config['transport'].get('eddy_overshoot_fhp', 1.0))
 eddy_overshoot_lambda_cap = float(config['transport'].get('eddy_overshoot_lambda_cap', 10.0))
 smooth_ledoux = getbool_diffusion_param('smooth_ledoux', fallback=False)
 smooth_ledoux_n = get_diffusion_param('smooth_ledoux_n', default=2.0)
-# Rotation-modified inviscid convective velocity (Fuentes et al. 2023, ApJL 950 L4).
-# When True (and [hydrostatic_equilibrium].rotation=True with omega>0), multiplies
-# v_MLT, the convective heat flux, and the MLT composition diffusivity by
-# R(Ro_NR) = Ro_NR / (1 + Ro_NR^5)^(1/5) on envelope boundaries (i < kcore).
-rotational_convection = config['transport'].getboolean('rotational_convection', fallback=False)
-# Cache the master rotation toggle from [hydrostatic_equilibrium]; rotation_active controls
-# whether omega from the HSE solver is meaningful.
-rotation_enabled = config['hydrostatic_equilibrium'].getboolean('rotation', fallback=False)
-# Convective entrainment (Fuentes 2023 ApJL 950 L4, Eq. 5; Linden 1975 hypothesis).
-# Adds D_ent = v_ent * xi_b * dr_b at the convective/stable boundary; see
-# entrainment_diffusivity() for the full formula.
-convective_entrainment = config['transport'].getboolean('convective_entrainment', fallback=False)
-entrainment_bracket_scale = float(config['transport'].get('entrainment_bracket_scale', 0.0))
 
 # --- Rayleigh-Taylor guard (default False = exact no-op) -------------------
 # At envelope faces where the REALIZED density profile is inverted (deeper
@@ -296,7 +283,17 @@ entrainment_bracket_scale = float(config['transport'].get('entrainment_bracket_s
 # residual, Jacobian, and R0_inv diagnostics mutually consistent.
 rt_guard = config['transport'].getboolean('rt_guard', fallback=False)
 _rt_guard_ncalls = 0   # throttled-logging counter
-entrainment_NC2_floor = float(config['transport'].get('entrainment_NC2_floor', 1e-12))
+# Treat the surface-BC Jacobian coupling (dTint/dS, dTint/dY, dTint/dZ) as
+# lagged/Picard: the surface-loss residual uses the step-start T_int (explicit
+# within each transport solve), so the consistent Jacobian contribution is
+# zero. The coupling is a normally-helpful semi-implicit acceleration, but it
+# can steer the Newton trajectory into unrecoverable surface states when the
+# outer zone thermally decouples (e.g. radiation = False ice giants at the
+# surface-convection shutoff). False (default) keeps the accelerated implicit
+# coupling; True removes it (exact residual, zero surface J coupling), which
+# also reproduces the solver behavior of pre-2026-07-22 runs, where a
+# pressure-interpolation bug zeroed the coupling unintentionally.
+lag_bc_jacobian = config['transport'].getboolean('lag_bc_jacobian', fallback=False)
 # Smooth convective criterion: blends D_mlt and D_micro via a sigmoid of the
 # raw (pre-softhinge) bracket, eliminating the hard Schwarzschild/Ledoux step
 # that creates composition-staircase artifacts.  See smooth_conv_indicator()
@@ -308,15 +305,6 @@ smooth_conv_scale = float(config['transport'].get('smooth_conv_scale', 0.0))
 # so adjacent cells get similar sigma_conv values and the staircase pattern is broken.
 # 0 disables spatial smoothing.
 smooth_conv_bracket_sigma = float(config['transport'].get('smooth_conv_bracket_sigma', 2.0))
-# Composition overshoot diffusivity (Herwig 2000-style, optionally coupled to Fuentes F_K).
-# Adds D_ov = factor * D_mlt(r_b) * exp(-d / (fhp * H_p)) into stable cells beyond every
-# convective/stable transition.  See composition_overshoot_diffusivity() helper.
-composition_overshoot = config['transport'].getboolean('composition_overshoot', fallback=False)
-composition_overshoot_factor = float(config['transport'].get('composition_overshoot_factor', 0.01))
-composition_overshoot_fhp = float(config['transport'].get('composition_overshoot_fhp', 0.5))
-composition_overshoot_rotation_couple = config['transport'].getboolean(
-    'composition_overshoot_rotation_couple', fallback=True
-)
 # Spatial smoothing window for D_b to suppress grid-scale oscillations.
 # 0 = off; positive integer = half-width of running geometric mean (e.g., 3
 # means a 7-point window: 3 neighbors on each side).
@@ -839,267 +827,6 @@ def fill_nonfinite_linear(arr, valid_slice):
     arr[valid_slice] = segment
 
 
-def rotation_factors(v_NR_b, Hp_b, omega, kcore, N, enabled):
-    """
-    Compute the Fuentes 2023 (ApJL 950 L4) rotation reduction factor R(Ro_NR)
-    and its Jacobian companions on every zone boundary.
-
-    Implements the smooth Stevenson-style interpolation
-        R(Ro_NR) = Ro_NR / (1 + Ro_NR^5)^(1/5),
-    which asymptotes to 1 in the slow-rotation limit (Ro_NR >> 1) and to
-    Ro_NR^(1/5) in the rapid-rotation Coriolis-Inertial-Archimedean limit
-    (Ro_NR << 1, matching Fuentes Eq. 3 / Aurnou+2020 CIA balance).
-
-    The non-rotating Rossby number per boundary is
-        Ro_NR = v_NR / (2 * omega * H_p),
-    using the local mixing-length-theory velocity already computed by
-    transport.py. The factor is applied only on envelope boundaries
-    (i in [1, kcore-1]); mantle/core boundaries (i >= kcore) and non-convective
-    boundaries (v_NR == 0) are returned with R = 1, R_eff = 3/2, D_eff = 1/2,
-    so existing convective-flux and D_MLT expressions are preserved unchanged.
-
-    The smooth interpolation is implemented as
-        R(Ro) = (Ro / (1 + Ro))^(1/5),
-    which is algebraically equivalent to (1 + 1/Ro)^(-1/5) but never computes
-    the 1/Ro division (avoiding overflow at deep envelope depths where
-    Ro_NR << 1). Limits: R -> Ro^(1/5) for Ro -> 0 (matches Fuentes Eq. 3);
-    R -> 1 for Ro -> infinity (no rotation effect).
-
-    The Jacobian companions are derived from the chain rule on
-    F_conv = phi_b * R * |bracket|^p (with p = 3/2). With R^5 = Ro/(1+Ro), so
-    1 - R^5 = 1/(1+Ro), and Ro ∝ |bracket|^(1/2) (since v_NR ∝ |bracket|^(1/2)
-    and Hp, Omega are bracket-independent within a Newton step), we get:
-        d ln R / d ln Ro      = (1 - R^5) / 5,
-        d ln R / d ln |bracket| = (1 - R^5) / 10.
-    Therefore:
-        d/d|bracket|[R * |bracket|^p] = R * |bracket|^(p-1) * R_eff,
-        R_eff(Ro_NR) = p + (1 - R^5) / 10.
-    For D_MLT = v_NR * R * H_p / 3 with v_NR ∝ |bracket|^(1/2):
-        d/d|bracket|[v_NR * R] = (v_NR * R / |bracket|) * D_eff,
-        D_eff(Ro_NR) = 1/2 + (1 - R^5) / 10.
-    Limits: Ro -> 0 gives R_eff = 8/5, D_eff = 3/5 (rapid-rotation Jacobian
-    correction is +6.7%/+20% on the convective flux/diffusion sensitivities);
-    Ro -> infinity gives R_eff = 3/2, D_eff = 1/2 (recovers unmodified MLT).
-
-    Parameters
-    ----------
-    v_NR_b : ndarray, shape (N+1,)
-        Non-rotating MLT convective velocity on zone boundaries [cm/s]. Surface
-        and center boundaries (indices 0, N) are typically 0 in the existing
-        code path.
-    Hp_b : ndarray, shape (N+1,)
-        Pressure scale height on zone boundaries [cm].
-    omega : float
-        Scalar rigid-body angular velocity [rad/s] from hydrostatic.py:get_omega.
-        If <= 0 or `enabled` is False, the function short-circuits to identity.
-    kcore : int
-        Index of the envelope-mantle boundary; envelope boundaries are
-        i in [1, kcore-1]. (Boundary 0 is the surface; boundary N is the
-        center.)
-    N : int
-        Number of mass zones; boundary arrays have length N+1.
-    enabled : bool
-        Master gate. When False, returns identity factors so callers can use
-        the same code path with or without rotation.
-
-    Returns
-    -------
-    R_b : ndarray, shape (N+1,)
-        Rotation reduction factor in [Ro_NR^(1/5), 1]. Identity (1.0) outside
-        the envelope or when disabled.
-    R_eff_b : ndarray, shape (N+1,)
-        Effective bracket-exponent factor for the convective flux Jacobian,
-        in [3/2, 8/5]. Identity (3/2) outside the envelope or when disabled.
-    D_eff_b : ndarray, shape (N+1,)
-        Effective bracket-exponent factor for the D_MLT Jacobian, in [1/2, 3/5].
-        Identity (1/2) outside the envelope or when disabled.
-    Ro_NR_b : ndarray, shape (N+1,)
-        Non-rotating Rossby number per boundary, useful for diagnostic output.
-        np.inf where rotation is disabled or v_NR is too small (treated as no
-        rotation effect).
-    """
-    R_b = np.ones(N + 1)
-    R_eff_b = np.full(N + 1, 1.5)
-    D_eff_b = np.full(N + 1, 0.5)
-    Ro_NR_b = np.full(N + 1, np.inf)
-
-    if not enabled or omega <= 0.0 or kcore <= 1:
-        return R_b, R_eff_b, D_eff_b, Ro_NR_b
-
-    # Envelope boundaries: indices 1..kcore-1 inclusive (excludes surface and the
-    # envelope-mantle interface itself, where v_NR_b is typically zero anyway).
-    env_slice = slice(1, kcore)
-    Hp_env = Hp_b[env_slice]
-    v_env = v_NR_b[env_slice]
-
-    # Guard against pathological values; if either is non-positive, leave the
-    # identity defaults (no rotation effect) for that boundary.
-    valid = (v_env > 0.0) & (Hp_env > 0.0) & np.isfinite(v_env) & np.isfinite(Hp_env)
-    if not np.any(valid):
-        return R_b, R_eff_b, D_eff_b, Ro_NR_b
-
-    Ro_local = np.full_like(v_env, np.inf)
-    Ro_local[valid] = v_env[valid] / (2.0 * omega * Hp_env[valid])
-
-    # R(Ro_NR) = Ro_NR / (1 + Ro_NR^5)^(1/5). Compute Ro^5 directly to avoid
-    # ever evaluating 1/Ro for tiny Ro at deep envelope depths.
-    # R = (Ro / (1+Ro))^(1/5) — algebraically equivalent to (1+1/Ro)^(-1/5)
-    # but avoids dividing by tiny Ro at deep envelope depths.  Limits:
-    #   Ro -> 0  : R -> Ro^(1/5)  (matches Fuentes 2023 Eq. 3 asymptote)
-    #   Ro -> inf: R -> 1          (no rotation suppression)
-    Ro_local_finite = np.where(np.isfinite(Ro_local), Ro_local, 0.0)
-    R5 = Ro_local_finite / (1.0 + Ro_local_finite)
-    # R5 is in [0, 1); fifth root preserves that range.
-    R_local = np.power(np.maximum(R5, 0.0), 0.2)
-
-    # Where Ro is infinite (e.g. v_NR == 0 region), R should remain 1.
-    R_local = np.where(valid, R_local, 1.0)
-    R5 = np.where(valid, R5, 1.0)
-
-    # Chain-rule factor (1-R^5)/10 from d ln R / d ln |bracket| = (1-R^5)/10.
-    R_eff_local = 1.5 + 0.1 * (1.0 - R5)
-    D_eff_local = 0.5 + 0.1 * (1.0 - R5)
-
-    R_b[env_slice] = R_local
-    R_eff_b[env_slice] = R_eff_local
-    D_eff_b[env_slice] = D_eff_local
-    Ro_NR_b[env_slice] = Ro_local
-
-    return R_b, R_eff_b, D_eff_b, Ro_NR_b
-
-
-# =====================================================================
-#  Convective entrainment helpers (Fuentes 2023 ApJL 950 L4, Eq. 5-8)
-# =====================================================================
-#
-# Energy balance at a convective/stable boundary (Linden 1975):
-#   (1/4) rho beta g |dC/dz| h^2 (dh/dt) ~ (1/2) rho U_conv^3
-# yields the entrainment velocity
-#   v_ent = 2 U_conv^3 / (N_C^2 h^2)
-# where N_C^2 = beta g |dC/dz| is the *compositional* Brunt-Vaisala.
-# Boundary localization is built directly from the entropy bracket
-# (no dependency on smooth_ledoux or the mantle melt-fraction chi_i),
-# and the resulting boundary-localized diffusivity D_ent = v_ent * xi_b * dr_b
-# is added to D_b inside update_SYZ.  All five helpers below are pure
-# functions of arrays available at the point of call.
-
-
-def composition_overshoot_diffusivity(
-    D_mlt_b, sigma_b, r_b, Hp_b, R_rot_b, kcore, N,
-    f_ov=0.01, f_hp=0.5, rotation_couple=True, enabled=True,
-):
-    """
-    Composition overshoot diffusivity (Herwig 2000 / Freytag 1996 style).
-
-    At every convective/stable transition (where sigma_b drops from > 0.5 to < 0.5
-    going inward), adds an exponentially-decaying composition diffusivity into
-    the cells beyond the boundary:
-
-        D_ov(r) = f_ov * D_mlt(r_b) * exp(-(r_b - r) / (f_hp * H_p))
-
-    Crucially, D_ov is non-zero in stable cells regardless of bracket sign --
-    so the Ledoux-stable layer just below a convective boundary erodes
-    continuously from above, instead of getting "pinned" once the convective
-    region has advanced one cell (the failure mode of pure boundary-localized
-    entrainment).
-
-    When rotation_couple is True and R_rot_b carries the Fuentes rotation
-    factor R(Ro_NR), f_ov is multiplied by R^3 inside the helper so the
-    overshoot strength inherits Fuentes' kinetic-energy-flux suppression
-    (F_K = (1/2) rho U_conv^3 ~ R^3 reduction at Jovian Ro).
-
-    Parameters
-    ----------
-    D_mlt_b : ndarray, shape (N+1,)
-        MLT composition diffusivity on boundaries [cm^2/s], rotation-modified
-        if rotational_convection is on.  Used as the "anchor" that sets the
-        overshoot strength at each boundary.
-    sigma_b : ndarray, shape (N+1,)
-        Smooth conv-vs-stable indicator in [0, 1] (e.g. from convective_indicator
-        or smooth_conv_indicator).  Used to find conv/stable transitions.
-    r_b : ndarray, shape (N+1,)
-        Radial boundary coordinates [cm].
-    Hp_b : ndarray, shape (N+1,)
-        Pressure scale height on boundaries [cm].
-    R_rot_b : ndarray, shape (N+1,)
-        Rotation reduction factor R(Ro_NR) per boundary.  All ones when
-        rotational_convection is disabled.
-    kcore : int
-        Index of the envelope-mantle boundary.  Overshoot is applied only on
-        envelope boundaries (i < kcore); the viscous mantle convection regime
-        is not relevant here.
-    N : int
-        Total number of mass zones (boundary arrays have length N+1).
-    f_ov : float
-        Base overshoot prefactor (0.01 default = 1% of D_mlt at the boundary).
-    f_hp : float
-        Penetration scale in pressure-scale-height units (0.5 default).
-    rotation_couple : bool
-        Whether to multiply f_ov by R_rot_b^3 at each boundary.  Fuentes-physics
-        coupling.
-    enabled : bool
-        Master gate.  When False, returns zeros so callers can use the same
-        code path with or without overshoot.
-
-    Returns
-    -------
-    D_ov_b : ndarray, shape (N+1,)
-        Overshoot diffusivity to be added to D_b [cm^2/s].
-    """
-    D_ov_b = np.zeros(N + 1)
-    if not enabled:
-        return D_ov_b
-
-    sigma = np.asarray(sigma_b, dtype=float)
-    r = np.asarray(r_b, dtype=float)
-    Hp = np.asarray(Hp_b, dtype=float)
-    Dml = np.asarray(D_mlt_b, dtype=float)
-    Rrot = np.asarray(R_rot_b, dtype=float)
-
-    # Find every convective -> stable transition (going inward from surface).
-    # Mass coordinate descends with index, so "inward" = larger index.
-    # A transition is at idx i where sigma[i] > 0.5 and sigma[i+1] < 0.5.
-    transitions = np.where((sigma[:-1] > 0.5) & (sigma[1:] < 0.5))[0]
-    if transitions.size == 0:
-        return D_ov_b
-
-    for i_trans in transitions:
-        i_bdry = int(i_trans + 1)  # the first stable boundary
-        # Skip if boundary is outside the envelope (mantle/core has its own physics).
-        if kcore is not None and 0 <= kcore <= N and i_bdry >= kcore:
-            continue
-        # Anchor values at the boundary.
-        D_anchor = Dml[i_bdry]
-        Hp_anchor = Hp[i_bdry] if Hp[i_bdry] > 0 else Hp[max(i_trans, 1)]
-        if D_anchor <= 0.0 or Hp_anchor <= 0.0:
-            continue
-        f_ov_local = float(f_ov)
-        if rotation_couple:
-            # R^3 from F_K = (1/2) rho U_conv^3 with U_conv = R * U_NR.
-            R_local = max(Rrot[i_bdry], 0.0)
-            f_ov_local *= R_local ** 3
-
-        H_ov = max(f_hp, 0.0) * Hp_anchor
-        if H_ov <= 0.0:
-            continue
-
-        # Apply overshoot diffusivity to all boundaries i >= i_bdry that are
-        # inside the envelope.  Penetration depth is r_b[i_bdry] - r_b[i].
-        i_max = min(N + 1, kcore if kcore is not None else N + 1)
-        idx_range = np.arange(i_bdry, i_max, dtype=int)
-        if idx_range.size == 0:
-            continue
-        depth = r[i_bdry] - r[idx_range]
-        # depth should be >= 0 (r descending with idx); guard.
-        depth = np.maximum(depth, 0.0)
-        D_ov_local = f_ov_local * D_anchor * np.exp(-depth / H_ov)
-        # Use np.maximum so multiple overlapping transitions take the larger
-        # contribution rather than summing (avoids double-counting).
-        D_ov_b[idx_range] = np.maximum(D_ov_b[idx_range], D_ov_local)
-
-    return D_ov_b
-
-
 def smooth_conv_indicator(bracket_raw_b, scale=None, k=10.0):
     """
     Smooth Schwarzschild/Ledoux convective indicator on zone boundaries.
@@ -1158,287 +885,6 @@ def smooth_conv_indicator(bracket_raw_b, scale=None, k=10.0):
     return sigma, dsigma_db
 
 
-def convective_indicator(bracket_dsdr_b, bracket_scale=None):
-    """
-    Smooth 0/1 indicator of "convective vs stable" per zone boundary.
-
-        sigma_b = tanh(max(bracket_dsdr_b, 0) / bracket_scale)
-
-    sigma_b -> 0 at bracket = 0 (stable, post-softhinge) and -> 1 for
-    bracket >> bracket_scale (deep in convective region).  Used by
-    boundary_localizer() and convective_zone_thickness().
-
-    Important: ORCHARD's bracket_dsdr_b is already softhinge-clamped to
-    >= 0 by the time entrainment runs, so in stable regions bracket
-    is exactly 0.  The tanh form -- not the symmetric 0.5*(1 + tanh)
-    form -- correctly maps this to sigma = 0 in stable and sigma = 1 in
-    convective.  The peak of |d sigma_b / dr| is at the convective
-    boundary where bracket transitions through bracket_scale on its way
-    to zero.
-
-    Parameters
-    ----------
-    bracket_dsdr_b : ndarray, shape (N+1,)
-        Entropy gradient bracket on zone boundaries (>= 0 post-softhinge).
-    bracket_scale : float or None
-        Smoothing width.  If None or non-positive, auto-calibrate as the
-        25th percentile of the positive bracket distribution (per call).
-
-    Returns
-    -------
-    sigma_b : ndarray, shape (N+1,)
-        Smooth conv-vs-stable indicator in [0, 1].
-    """
-    b = np.asarray(bracket_dsdr_b, dtype=float)
-    if bracket_scale is None or bracket_scale <= 0.0:
-        positive = b[b > 0.0]
-        if positive.size > 0:
-            scale = np.percentile(positive, 25)
-            scale = max(scale, 1e-30)
-        else:
-            scale = 1.0
-    else:
-        scale = float(bracket_scale)
-    return np.tanh(np.maximum(b, 0.0) / scale)
-
-
-def boundary_localizer(sigma_b, r_b):
-    """
-    Boundary-localizer xi_b = |d sigma_b / dr|, normalized so that
-        sum(xi_b * dr_b) ~ 1
-    across each individual transition.  In practice we normalize globally
-    (so the integral over all space is the number of distinct edges in
-    sigma_b), which is fine because xi_b is multiplied by D_ent only at
-    boundaries where it is nonzero.
-
-    Parameters
-    ----------
-    sigma_b : ndarray, shape (N+1,)
-        Smooth convective indicator in [0, 1] from convective_indicator().
-    r_b : ndarray, shape (N+1,)
-        Radial boundary coordinates [cm].
-
-    Returns
-    -------
-    xi_b : ndarray, shape (N+1,)
-        Boundary localizer; nonzero only where sigma transitions, zero in
-        bulk convective and bulk stable interior.
-    """
-    sigma = np.asarray(sigma_b, dtype=float)
-    r = np.asarray(r_b, dtype=float)
-    xi_b = np.zeros_like(sigma)
-    if r.size < 3:
-        return xi_b
-
-    # Centered differences on interior boundaries; one-sided at ends.
-    dr_inner = r[2:] - r[:-2]
-    dr_inner = np.where(np.abs(dr_inner) < 1e-30, 1e-30, dr_inner)
-    xi_b[1:-1] = np.abs((sigma[2:] - sigma[:-2]) / dr_inner)
-
-    # Normalize so the integral xi_b * dr ~ 1 per transition.  Each tanh
-    # boundary contributes about 1.0 to sum(|d sigma / dr| * dr) by design,
-    # so no explicit scaling is needed -- xi_b is already the differential
-    # form of the transition.  Avoid renormalizing globally so multiple
-    # transitions retain their relative weights.
-    return xi_b
-
-
-def convective_zone_thickness(sigma_b, r_b):
-    """
-    Per-boundary integrated convective-zone thickness above each boundary:
-
-        h_b[k] = sum over j > k of  sigma_b[j] * (r_b[j-1] - r_b[j])
-
-    i.e. the column of "fully convective" layer sitting above zone boundary k.
-    This is Fuentes' h: the depth of the convective layer driving entrainment
-    at the underlying stable interface.
-
-    Mass coordinate runs surface->center as boundary index 0..N, so j > k
-    means "shallower than k".
-
-    Parameters
-    ----------
-    sigma_b : ndarray, shape (N+1,)
-        Smooth convective indicator from convective_indicator().
-    r_b : ndarray, shape (N+1,)
-        Radial boundary coordinates [cm], descending (surface = r_b[0]).
-
-    Returns
-    -------
-    h_b : ndarray, shape (N+1,)
-        Integrated convective-zone thickness above each boundary [cm].
-        Always non-negative.
-    """
-    sigma = np.asarray(sigma_b, dtype=float)
-    r = np.asarray(r_b, dtype=float)
-    n = sigma.size
-
-    # Per-boundary outward-step thickness contribution: dr_b[j] = r_b[j-1] - r_b[j]
-    # (positive because r is descending). For j = 0 (surface) there is no above-cell.
-    dr_above = np.zeros(n)
-    dr_above[1:] = np.maximum(r[:-1] - r[1:], 0.0)
-
-    contrib = sigma * dr_above  # contribution of each boundary's "above-cell"
-
-    # h_b[k] = total contribution from boundaries 0..k (the part of the column
-    # that sits above boundary k).  Use cumulative sum for O(N).
-    cum = np.cumsum(contrib)
-    h_b = cum.copy()
-    # The convention is "above boundary k": include boundaries shallower than k.
-    # cum[k] = contrib[0] + ... + contrib[k].  Since contrib[0] = 0 (no above
-    # cell at the surface), this gives the integrated thickness from r_b[0]
-    # down to r_b[k].
-    return h_b
-
-
-def compositional_brunt(g_b, dY_dr_b, dZ_dr_b, beta_Y=0.5, beta_Z=2.0):
-    """
-    Compositional Brunt-Vaisala squared frequency on zone boundaries:
-
-        N_C^2_b = g * max(|beta_Y * dY/dr|, |beta_Z * dZ/dr|)
-
-    where beta_X = (d ln rho / d X)_{P,T} are dimensionless composition
-    density derivatives.  We use the **max** (not sum) to select the
-    *dominant* stabilizing composition gradient -- Y and Z gradients
-    with opposite signs would otherwise cancel and create a spurious
-    large v_ent.
-
-    For an H/He+Z mixture at envelope conditions:
-      - beta_Y ~ 0.5    (helium slightly heavier per baryon than hydrogen)
-      - beta_Z ~ 2.0    (water/rock much heavier per baryon than H/He)
-    Order-of-magnitude estimates that get the entrainment magnitude
-    correct to within a factor of ~2 across the envelope.  Configurable
-    via the function arguments for sensitivity studies.
-
-    Note: this helper takes |dY/dr| and |dZ/dr| in absolute value because
-    only stabilizing gradient magnitudes matter for the entrainment energy
-    balance -- the sign is irrelevant once we square it.
-
-    Parameters
-    ----------
-    g_b : ndarray, shape (N+1,)
-        Local gravitational acceleration on boundaries [cm/s^2].
-    dY_dr_b : ndarray, shape (N+1,)
-        Helium gradient on boundaries [1/cm].
-    dZ_dr_b : ndarray, shape (N+1,)
-        Metal gradient on boundaries [1/cm].
-    beta_Y, beta_Z : float
-        Approximate (dlnrho/dC)_{P,T} for Y and Z.  Defaults from
-        H/He+water mixture EOS at envelope conditions.
-
-    Returns
-    -------
-    NC2_b : ndarray, shape (N+1,)
-        Compositional Brunt-Vaisala squared on boundaries [s^-2].
-        Always non-negative.
-    """
-    g = np.asarray(g_b, dtype=float)
-    dY = np.asarray(dY_dr_b, dtype=float)
-    dZ = np.asarray(dZ_dr_b, dtype=float)
-    B_Y = np.abs(beta_Y * dY)
-    B_Z = np.abs(beta_Z * dZ)
-    return g * np.maximum(B_Y, B_Z)
-
-
-def entrainment_diffusivity(
-    U_conv_b, NC2_b, h_b, xi_b, dr_b,
-    NC2_floor=1e-12, enabled=True,
-):
-    """
-    Boundary-localized entrainment diffusivity D_ent_b (Fuentes 2023 Eq. 5).
-
-    Per zone boundary:
-        v_ent_raw_b = 2 * U_conv_b^3 / (max(NC2_b, NC2_floor) * h_b^2)
-        v_ent_b     = v_ent_raw_b * U_conv_b / sqrt(v_ent_raw_b^2 + U_conv_b^2)
-                                                    (smooth cap at U_conv_b)
-        D_ent_b     = v_ent_b * (xi_b * dr_b) * h_b
-
-    The smooth cap ensures v_ent_b -> U_conv_b in the unphysical limit
-    NC2 -> 0 (entrainment cannot exceed the convective eddy speed driving
-    it).  When `enabled = False`, returns identity zeros so callers can use
-    the same code path.
-
-    Dimensions of D_ent: (cm/s) * (dimensionless) * (cm) = cm^2/s.
-
-    Physically: v_ent is the speed at which the convective/stable boundary
-    advances into the gradient layer (Fuentes Eq. 5, Linden 1975).  The
-    equivalent diffusion coefficient -- giving the same front-traversal
-    time across a layer of size L -- is D_eff = v_ent * L (the upwind /
-    numerical-advection diffusivity).  For Fuentes' entrainment the
-    relevant L is the convective layer thickness h_b (the depth of the
-    well-mixed reservoir into which entrained material is incorporated),
-    NOT the local cell width dr_b.  We then localize the diffusivity
-    to the conv/stable transition by multiplying by the dimensionless
-    boundary localizer (xi_b * dr_b) which is ~1 at the boundary and ~0
-    elsewhere.
-
-    Parameters
-    ----------
-    U_conv_b : ndarray, shape (N+1,)
-        Convective velocity on boundaries [cm/s] -- ALREADY rotation-modified
-        if rotational_convection = True (carries R(Ro_NR) factor).
-    NC2_b : ndarray, shape (N+1,)
-        Compositional Brunt-Vaisala squared on boundaries [s^-2].
-    h_b : ndarray, shape (N+1,)
-        Convective-zone thickness above each boundary [cm].  Enters BOTH
-        through Fuentes' v_ent formula (Eq. 5, the h^2 in the denominator)
-        AND as the effective length scale L in the front-to-diffusion
-        equivalence (D = v * L).
-    xi_b : ndarray, shape (N+1,)
-        Smooth boundary localizer [1/cm].  Nonzero only at conv/stable edges.
-    dr_b : ndarray, shape (N+1,)
-        Local cell radial thickness [cm].  Used together with xi_b to form
-        the dimensionless localizer (xi * dr) ~ [0, 1].
-    NC2_floor : float
-        Hard floor for NC2_b denominator [s^-2] to prevent division blow-up.
-    enabled : bool
-        Master gate.  When False, returns all-zero arrays.
-
-    Returns
-    -------
-    D_ent_b : ndarray, shape (N+1,)
-        Entrainment diffusivity to be added to D_b [cm^2/s].
-    v_ent_b : ndarray, shape (N+1,)
-        The entrainment velocity field for diagnostics [cm/s].
-    """
-    U = np.asarray(U_conv_b, dtype=float)
-    NC2 = np.asarray(NC2_b, dtype=float)
-    h = np.asarray(h_b, dtype=float)
-    xi = np.asarray(xi_b, dtype=float)
-    dr = np.asarray(dr_b, dtype=float)
-
-    D_ent_b = np.zeros_like(U)
-    v_ent_b = np.zeros_like(U)
-
-    if not enabled:
-        return D_ent_b, v_ent_b
-
-    # Mask: only compute where xi_b is meaningfully nonzero (boundary cells)
-    # AND U_conv > 0 AND h > 0.  Elsewhere D_ent / v_ent stay zero.
-    valid = (xi > 0.0) & (U > 0.0) & (h > 0.0) & np.isfinite(U) & np.isfinite(h) & np.isfinite(xi)
-    if not np.any(valid):
-        return D_ent_b, v_ent_b
-
-    NC2_safe = np.maximum(NC2, NC2_floor)
-
-    # v_ent = 2 U^3 / (NC2 h^2)  (Fuentes Eq. 5)
-    v_raw = np.zeros_like(U)
-    v_raw[valid] = 2.0 * U[valid] ** 3 / (NC2_safe[valid] * h[valid] ** 2)
-
-    # Smooth saturation cap: v_ent -> U_conv as v_raw -> infinity, identity for v_raw << U_conv
-    denom = np.sqrt(v_raw ** 2 + U ** 2)
-    denom_safe = np.where(denom > 0, denom, 1e-99)
-    v_ent_b = np.where(valid, v_raw * U / denom_safe, 0.0)
-
-    # D_ent = v_ent * (xi * dr) * h.  (xi * dr) is dimensionless [0, 1]
-    # at the boundary; h provides the length scale for the
-    # advection-to-diffusion equivalence (D ~ v_ent * L where L is the
-    # depth of the layer being entrained, i.e. the convective zone
-    # thickness above the boundary).
-    D_ent_b = v_ent_b * xi * dr * h
-    return D_ent_b, v_ent_b
-
-
 def update_SYZ(
     T,
     r_b,
@@ -1465,7 +911,7 @@ def update_SYZ(
     y_rain_gap_old,
     Nu_T_eff_old,
     Nu_X_eff_old,
-    omega_old=0.0,
+    omega_old=0.0,  # unused; retained for call-signature stability
     dTdt_prev=None,
     ):
 
@@ -1940,6 +1386,15 @@ def update_SYZ(
     if not np.isfinite(dTint_dY):
         dTint_dY = 0.0
     if not np.isfinite(dTint_dZ):
+        dTint_dZ = 0.0
+
+    # Optional lagged/Picard treatment of the surface-BC Jacobian coupling
+    # (see lag_bc_jacobian comment at the config parse): the residual's
+    # surface loss uses the step-start T_int, so zeroing these terms is the
+    # consistent inexact-Newton choice and never changes a converged solution.
+    if lag_bc_jacobian:
+        dTdS = 0.0
+        dTint_dY = 0.0
         dTint_dZ = 0.0
 
     # Compute relevant scale heights, conduction/radiation
@@ -3473,36 +2928,6 @@ def update_SYZ(
         else:
             D_b_new = D_micro_b
 
-        # Rotation-modified MLT (Fuentes et al. 2023, ApJL 950 L4):
-        # Compute R(Ro_NR) = Ro_NR / (1 + Ro_NR^5)^(1/5) on every boundary,
-        # plus the Jacobian companions R_eff (for convective flux ∝ R · |bracket|^p)
-        # and D_eff (for D_MLT ∝ √|bracket| · R). Returns identity factors
-        # (R=1, R_eff=3/2, D_eff=1/2) when disabled or omega=0, so the rest of
-        # the routine is rotation-agnostic.
-        v_MLT_b_full = np.zeros(N + 1)
-        if D_MLT:
-            v_MLT_b_full[1:-1] = v_MLT_i
-        else:
-            # If D_MLT is off, build v_MLT just for the rotation factor calc.
-            v_MLT_b_full[1:-1] = np.sqrt(
-                g_i * Hp_i ** 2 / Cp_i / 8
-                * np.maximum(bracket_dsdr_b[1:-1], 0.0)
-            )
-        Hp_b_full = np.zeros(N + 1)
-        Hp_b_full[1:-1] = Hp_i
-        R_rot_b, R_eff_rot_b, D_eff_rot_b, Ro_NR_b = rotation_factors(
-            v_MLT_b_full, Hp_b_full, omega_old, kcore, N,
-            rotational_convection and rotation_enabled,
-        )
-
-        # Apply R(Ro_NR) to the MLT composition diffusivity on envelope
-        # boundaries.  The factor is identity (1.0) outside the envelope or when
-        # disabled, so this is regression-safe.
-        if D_MLT:
-            D_mlt_b *= R_rot_b
-            D_b_new = D_mlt_b + D_micro_b
-            DZ_b_new = D_mlt_b + DZ_micro_b
-
         # Smooth convective criterion: replace the hard "if bracket > 0 then
         # D_mlt else D_micro" gate with a sigmoid blend
         #     D_b = sigma_conv * D_mlt + D_micro
@@ -3547,28 +2972,10 @@ def update_SYZ(
             )
             D_mlt_smooth_b = np.zeros(N + 1)
             D_mlt_smooth_b[1:-1] = v_MLT_smooth_i * Hp_i / 3.0
-            D_mlt_smooth_b *= R_rot_b
             D_b_new = sigma_conv_b * D_mlt_smooth_b + D_micro_b
             DZ_b_new = sigma_conv_b * D_mlt_smooth_b + DZ_micro_b
             # Keep D_mlt_b consistent for downstream code (Jacobian etc.).
             D_mlt_b = sigma_conv_b * D_mlt_smooth_b
-
-        # Apply R(Ro_NR) to the convective heat flux prefactor.  Multiplying
-        # phi_prime_b once propagates the factor automatically to both:
-        #   - the convective flux assembly  (conv_flux_b ∝ phi_prime_b · |bracket|^p)
-        #   - the Jacobian rows             (Jacobian ∝ phi_prime_b · d_flux_dS · ...)
-        # The Newton-Raphson Jacobian additionally needs the chain-rule
-        # contribution from R's bracket-dependence (Ro_NR ∝ √|bracket|), which
-        # we encode by rescaling d_flux_dS by (R_eff / p_default).  This keeps
-        # the existing flux-bracket-power factor (typically 3/2) intact while
-        # adding the (1/2)(1-R^5) term in the rapid-rotation limit, smoothly
-        # blending to identity when rotation is off.  See rotation_factors()
-        # docstring for the derivation.
-        phi_prime_b = phi_prime_b * R_rot_b
-        # Default flux-bracket exponent is 1.5 (Stevenson MLT); R_eff -> 1.5
-        # outside the envelope or when rotation is disabled, so the scaling
-        # factor (R_eff / 1.5) is identity there.
-        d_flux_dS = d_flux_dS * (R_eff_rot_b / 1.5)
 
         # --- Smooth Ledoux transition: add transitional diffusivity ---
         # In zones that are Schwarzschild-unstable but Ledoux-stable, smoothly
@@ -3583,18 +2990,6 @@ def update_SYZ(
                 g_i * Hp_i ** 2 / Cp_i / 8 * bracket_schwarz_pos_i
             )
             D_schwarz_i = v_MLT_schwarz_i * Hp_i / 3.0
-
-            # Apply the rotation reduction factor built from a Schwarzschild
-            # Rossby number (independent of the Ledoux bracket since the
-            # Schwarzschild flux is what would flow without composition
-            # stabilization).  Identity factor when disabled.
-            v_MLT_schwarz_b_full = np.zeros(N + 1)
-            v_MLT_schwarz_b_full[1:-1] = v_MLT_schwarz_i
-            R_rot_schwarz_b, _, _, _ = rotation_factors(
-                v_MLT_schwarz_b_full, Hp_b_full, omega_old, kcore, N,
-                rotational_convection and rotation_enabled,
-            )
-            D_schwarz_i = D_schwarz_i * R_rot_schwarz_b[1:-1]
 
             # Transition zone: Schwarzschild > 0 (thermally unstable) AND
             #                   Ledoux <= 0 (composition-stabilized).
@@ -3627,112 +3022,6 @@ def update_SYZ(
             # Add transitional diffusivity (only in transition zones)
             D_b_new[1:-1] += f_transition_i * D_schwarz_i
             DZ_b_new[1:-1] += f_transition_i * D_schwarz_i
-
-        # ----------------------------------------------------------------
-        # Convective entrainment (Fuentes 2023 ApJL 950 L4, Eq. 5).
-        # ----------------------------------------------------------------
-        # Add a boundary-localized effective diffusivity D_ent at the
-        # convective/stable boundary, with v_ent set by the energy-balance
-        # entrainment hypothesis.  When rotational_convection is also on,
-        # U_conv = v_MLT * R(Ro_NR) carries the rotation factor and v_ent
-        # ~ U_conv^3 acquires the R^3 ~ 200x reduction Fuentes predicts.
-        #
-        # Picard treatment: v_ent_b is computed from the current Newton
-        # iterate's bracket / U_conv, then added as a known coefficient to
-        # D_b_new and DZ_b_new.  The implicit C-update is then handled by
-        # the standard diffusion Jacobian -- we do NOT chain-rule through
-        # the cubic v_ent in the Jacobian, which avoids the explosive
-        # bracket-sensitivity at boundaries.  See plan §"Picard on v_ent".
-        v_ent_b = np.zeros(N + 1)
-        D_ent_b = np.zeros(N + 1)
-        if convective_entrainment and D_MLT:
-            # U_conv: rotation-modified MLT velocity on full boundary array.
-            U_conv_b = v_MLT_b_full * R_rot_b
-
-            # Composition gradients on boundaries.  Same construction the
-            # Schwarzschild bracket uses, but pulled out so we do not
-            # require smooth_ledoux to be on.
-            denom_local = np.diff(r)  # length N-1
-            dY_dr_b = np.zeros(N + 1)
-            dZ_dr_b = np.zeros(N + 1)
-            dY_dr_b[1:N] = np.diff(Y) / denom_local
-            dZ_dr_b[1:N] = np.diff(Z) / denom_local
-
-            # Compositional Brunt-Vaisala squared (boundary-only, length N+1).
-            g_b_full = np.zeros(N + 1)
-            g_b_full[1:-1] = g_i
-            NC2_b = compositional_brunt(g_b_full, dY_dr_b, dZ_dr_b)
-
-            # Smooth conv-vs-stable indicator and boundary localizer.
-            sigma_b = convective_indicator(
-                bracket_dsdr_b, bracket_scale=entrainment_bracket_scale,
-            )
-            xi_b = boundary_localizer(sigma_b, r_b)
-
-            # Convective-zone thickness above each boundary.
-            h_b = convective_zone_thickness(sigma_b, r_b)
-
-            # Local cell radial thickness (centered on each boundary).
-            dr_b = np.zeros(N + 1)
-            if N >= 2:
-                dr_b[1:-1] = np.maximum(0.5 * (r_b[:-2] - r_b[2:]), 0.0)
-                dr_b[0] = max(r_b[0] - r_b[1], 0.0)
-                dr_b[-1] = max(r_b[-2] - r_b[-1], 0.0)
-
-            D_ent_b, v_ent_b = entrainment_diffusivity(
-                U_conv_b, NC2_b, h_b, xi_b, dr_b,
-                NC2_floor=entrainment_NC2_floor,
-                enabled=True,
-            )
-
-            # Mask to envelope only (i < kcore).  Mantle/core boundaries do
-            # not participate in inviscid entrainment.
-            if kcore is not None and 0 <= kcore <= N:
-                if kcore < N + 1:
-                    D_ent_b[kcore:] = 0.0
-                    v_ent_b[kcore:] = 0.0
-
-            # Add to both Y and Z composition diffusivities.
-            D_b_new[1:-1] += D_ent_b[1:-1]
-            DZ_b_new[1:-1] += D_ent_b[1:-1]
-
-        # ----------------------------------------------------------------
-        # Composition overshoot diffusivity (Herwig 2000 / Freytag 1996,
-        # optionally coupled to Fuentes 2023 F_K).  At every conv/stable
-        # transition, adds an exponentially-decaying D into the cells
-        # below.  Unlike convective_entrainment which localizes only at
-        # the boundary cell, this leaks into the stable region and lets
-        # the gradient erode continuously from above instead of getting
-        # pinned by Ledoux stability after one cell of advance.
-        #
-        # Picard treatment: the overshoot prefactor uses D_mlt_b at the
-        # boundary (already rotation-modified), so the rotation factor
-        # carries through automatically.  We do NOT chain-rule through
-        # D_mlt_b's bracket-dependence in the Jacobian here -- that's
-        # already handled by the existing dDmlt_dBracket_b machinery, and
-        # the additional contribution from a moving exp(-d/H_ov) anchor
-        # is small.  This is consistent with the Picard treatment used
-        # for the convective_entrainment block.
-        D_ov_b = np.zeros(N + 1)
-        if composition_overshoot and D_MLT:
-            # Build sigma_b for boundary identification.  When smooth_conv
-            # is on we already have it; otherwise build it from bracket_dsdr_b.
-            if smooth_convection_criterion:
-                sigma_for_ov_b = sigma_conv_b
-            else:
-                sigma_for_ov_b = convective_indicator(
-                    bracket_dsdr_b, bracket_scale=None,
-                )
-            D_ov_b = composition_overshoot_diffusivity(
-                D_mlt_b, sigma_for_ov_b, r_b, Hp_b_full, R_rot_b,
-                kcore, N,
-                f_ov=composition_overshoot_factor,
-                f_hp=composition_overshoot_fhp,
-                rotation_couple=composition_overshoot_rotation_couple,
-                enabled=True,
-            )
-            D_b_new[1:-1] += D_ov_b[1:-1]
-            DZ_b_new[1:-1] += D_ov_b[1:-1]
 
         t_Db_relax_curr = min(2 * dt, t_Db_relax)
 
@@ -3899,13 +3188,6 @@ def update_SYZ(
                 * d_bracket_dsdr_b[1:-1],
                 0.0,
             )
-            # Rotation correction to the D_MLT Jacobian: D_MLT_R ∝ √|bracket| · R(Ro)
-            # gives d ln D_R / d ln |bracket| = (1/2)(2 - R^5).  The default
-            # formula above uses the 1/2 factor only, so we scale by
-            # D_eff / 0.5 = 2 - R^5.  Identity (1.0) outside the envelope or
-            # when rotation is disabled.
-            dDmlt_dBracket_b *= (D_eff_rot_b / 0.5)
-
             # Smooth-conv chain-rule term: D_b = sigma_conv * D_mlt_smooth + D_micro
             # contributes  d sigma / d bracket * D_mlt_smooth  in addition to the
             # standard  sigma * d D_mlt_smooth / d bracket  already included via
@@ -4756,8 +4038,7 @@ def update_SYZ(
             # Newton whenever semiconvection was on.  With semi_phi frozen
             # at old-state Nu, the semi flux is treated as a lagged/Picard
             # term (exact residual + zero Jacobian = consistent inexact
-            # Newton), the same scheme as convective_entrainment and
-            # composition_overshoot.
+            # Newton).
             combined_flux_kp1 = conv_val_kp1 + rad_val_kp1
             J[i_right, i_right + col_kp1_off] = combined_flux_kp1[mask_right]
 
@@ -4926,7 +4207,7 @@ def update_SYZ(
         # coupling, so Newton pushed on dead faces (the audit-#17 probe
         # measured exactly that mismatch).  Treated as a lagged/Picard
         # term instead: exact residual, zero Jacobian -- consistent
-        # inexact Newton, same scheme as entrainment/overshoot; gate-run
+        # inexact Newton; gate-run
         # cost was niter 17 vs 13 control.  If Newton cost ever becomes
         # limiting, the exact alternative is: old entries multiplied by
         # the current-state clamp indicator (schwarz_i > 0).
@@ -6156,6 +5437,9 @@ def update_SYZ(
         )
 
     restart_count = 0
+    # One-shot flag for the last-resort restart that lags the surface-BC
+    # Jacobian coupling (see the except-block below).
+    bc_jac_lagged = False
 
     # If high_precision, we also demand flux_error < flux_tol for stability
     if high_precision:
@@ -6537,10 +5821,38 @@ def update_SYZ(
             #  - or safe_newton_step could not find a finite update
             restart_count += 1
             if restart_count > max_restarts:
-                _crash_report(e)
+                # Last-resort rescue before declaring failure: lag the
+                # surface-BC Jacobian coupling. The surface-loss residual uses
+                # the step-start T_int (explicit within this solve), so the
+                # consistent Jacobian contribution is zero; dTdS/dTint_dY/
+                # dTint_dZ are a normally-helpful semi-implicit acceleration
+                # that can destabilize Newton when the surface zone thermally
+                # decouples (e.g. radiation = False ice giants at the
+                # surface-convection shutoff -> runaway S correction at zone
+                # 0). Retry once with the coupling removed (exact residual,
+                # zero surface J coupling -- the same lagged/Picard pattern
+                # used for the semiconvective flux) at the original
+                # relaxation weight.
+                if (not bc_jac_lagged) and losses and (
+                        dTdS != 0.0 or dTint_dY != 0.0 or dTint_dZ != 0.0):
+                    bc_jac_lagged = True
+                    logger.warning(
+                        "update_SYZ: Newton failed after %d restarts with the "
+                        "surface-BC Jacobian coupling active; retrying once "
+                        "with dTdS/dTint_dY/dTint_dZ lagged (Picard).",
+                        max_restarts,
+                    )
+                    dTdS = 0.0
+                    dTint_dY = 0.0
+                    dTint_dZ = 0.0
+                    weight_local = weight
+                else:
+                    _crash_report(e)
+            else:
+                # soften the relaxation for the conventional restarts
+                weight_local *= 0.5
 
-            # soften the relaxation and *restart from the old state*
-            weight_local *= 0.5
+            # *restart from the old state*
             S_trial = Sold.copy() * norm / S0
             Y_trial = Yold.copy()
             Z_trial = Zold.copy()

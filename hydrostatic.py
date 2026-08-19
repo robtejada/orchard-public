@@ -106,53 +106,32 @@ isothermal_compact_core = config['hydrostatic_equilibrium'].getboolean(
 )
 # Theory-of-Figures order for gravity harmonics and figure computation.
 #   4 (default): Nettelmann 2017 ToF4 via utils/TOF.py   (J_2..J_8)
-#   7          : Nettelmann 2021 ToF7 via utils/TOF7.py  (J_2..J_14)
 tof_order = int(config['hydrostatic_equilibrium'].get('tof_order', fallback=4))
-if tof_order not in (4, 7):
+if tof_order != 4:
     raise ValueError(
-        f"[hydrostatic_equilibrium] tof_order must be 4 or 7, got {tof_order}"
+        f"[hydrostatic_equilibrium] tof_order = {tof_order} is not available "
+        "in this version of ORCHARD; only tof_order = 4 (Nettelmann 2017 ToF4) "
+        "is supported."
     )
-if tof_order == 7:
-    from utils.TOF7 import get_moments7
-else:
-    get_moments7 = None
 
-# Gravity backend: 'tof' (default; ToF4/ToF7 selected by tof_order above) or
-# 'cms' (Concentric Maclaurin Spheroids, utils/cms_hubbard.py). CMS is
-# nonperturbative (matches MH24) but MUCH slower than ToF7 per call — intended
-# as a validation/post-processing backend, not the Gyr-evolution inner loop.
+# Gravity backend for the harmonics. Only the Theory of Figures ('tof') is
+# available in this version of ORCHARD.
 gravity_method = str(
     config['hydrostatic_equilibrium'].get('gravity_method', fallback='tof')
 ).lower()
-if gravity_method == 'cms':
-    from utils.cms_hubbard import get_moments_cms_from_mean
-    _cms_kmax = int(config['hydrostatic_equilibrium'].get('cms_kmax', fallback=10))
-    _cms_nmu = int(config['hydrostatic_equilibrium'].get('cms_nmu', fallback=48))
-
-# Module-level warm-start cache for the CMS shape field (zeta, shape (N, L)),
-# reused as the Jacobi initial guess across calls. Reset by init=True.
-_cms_shape_cache = None
-_cms_shape_cache_nz = None
-
-# Module-level warm-start cache for the full 8-tuple shape functions returned
-# by TOF7. Reset by hydrostatic_equilibrium(init=True) at the start of a fresh
-# evolution run. Unused when tof_order == 4.
-_tof7_shape_cache = None
-_tof7_shape_cache_nz = None
+if gravity_method != 'tof':
+    raise ValueError(
+        f"[hydrostatic_equilibrium] gravity_method = '{gravity_method}' is not "
+        "available in this version of ORCHARD; use gravity_method = 'tof'."
+    )
 
 # Module-level warm-start cache for the 5-tuple (s0, s2, s4, s6, s8) returned
-# by TOF4. Mirrors the TOF7 pattern above. Reset by hydrostatic_equilibrium(
-# init=True) at the start of a fresh evolution run. Using the previous call's
-# converged shapes as the Jacobi initial guess cuts the iteration count from
-# ~cold-start to typically 3-5 iterations once HSE has stabilized.
+# by TOF4. Reset by hydrostatic_equilibrium(init=True) at the start of a fresh
+# evolution run. Using the previous call's converged shapes as the Jacobi
+# initial guess cuts the iteration count from ~cold-start to typically 3-5
+# iterations once HSE has stabilized.
 _tof4_shape_cache = None
 _tof4_shape_cache_nz = None
-
-def _tof7_reset_cache():
-    """Clear the TOF7 warm-start cache (called at init=True)."""
-    global _tof7_shape_cache, _tof7_shape_cache_nz
-    _tof7_shape_cache = None
-    _tof7_shape_cache_nz = None
 
 
 def _tof4_reset_cache():
@@ -160,13 +139,6 @@ def _tof4_reset_cache():
     global _tof4_shape_cache, _tof4_shape_cache_nz
     _tof4_shape_cache = None
     _tof4_shape_cache_nz = None
-
-
-def _cms_reset_cache():
-    """Clear the CMS warm-start (zeta) cache (called at init=True)."""
-    global _cms_shape_cache, _cms_shape_cache_nz
-    _cms_shape_cache = None
-    _cms_shape_cache_nz = None
 
 
 # One-shot flag for the rotation breakup diagnostic. Set True after the first
@@ -184,75 +156,31 @@ def _reset_breakup_check():
 
 def _call_tof(r_in, rho_in, m_in, omega_in):
     """
-    Unified Theory-of-Figures dispatcher.
+    Theory-of-Figures (ToF4) wrapper.
 
-    Always returns the TOF.py-compatible 8-element j2n array
+    Returns the TOF.py 8-element j2n array
         [J2*1e6, J4*1e6, J6*1e6, J8*1e6, oblateness, R_eq, R_pol, I_MoI]
-    and 5-tuple shape functions (s0, s2, s4, s6, s8), so downstream consumers
-    (evolution.py's unpack, shapes_list flatten) need not special-case
-    tof_order. Dispatches on the module-level `tof_order` config:
-
-      * tof_order == 4 -> utils.TOF.get_moments, with warm-started Jacobi
-        initial guess drawn from the module-level cache of the previous call's
-        converged s-functions (s2, s4, s6, s8). Mirrors the TOF7 pattern.
-      * tof_order == 7 -> utils.TOF7.get_moments7, with warm-started Jacobi
-        initial guess drawn from the module-level cache of the previous call's
-        converged s-functions. The 11-element TOF7 j2n is repacked down to
-        the 8-element layout and the 8-tuple shapes is sliced to 5 (s0..s8).
+    and the 5-tuple shape functions (s0, s2, s4, s6, s8) from
+    utils.TOF.get_moments, with a warm-started Jacobi initial guess drawn
+    from the module-level cache of the previous call's converged s-functions
+    (s2, s4, s6, s8).
 
     The warm-start cache is reset whenever hydrostatic_equilibrium(init=True)
     is entered, which corresponds to a fresh evolution run.
     """
-    global _tof7_shape_cache, _tof7_shape_cache_nz
     global _tof4_shape_cache, _tof4_shape_cache_nz
-    global _cms_shape_cache, _cms_shape_cache_nz
-    if gravity_method == 'cms':
-        # CMS backend (Concentric Maclaurin Spheroids). r_in are mean/volumetric
-        # radii (center->surface) as for ToF; the helper converts to CMS's
-        # equatorial-radius grid internally. Warm-start zeta from the cache.
-        ig = (_cms_shape_cache if (_cms_shape_cache is not None
-              and _cms_shape_cache_nz == len(r_in)) else None)
-        j2n, zeta, _ = get_moments_cms_from_mean(
-            r_in[::-1], rho_in[::-1], m_in[-1], omega_in,
-            G=G, kmax=_cms_kmax, L=_cms_nmu, initial_guess=ig,
-        )
-        _cms_shape_cache = zeta
-        _cms_shape_cache_nz = len(r_in)
-        # CMS does not produce ToF s_n figure functions; return the standard
-        # 5-array zero placeholder so downstream consumers are unaffected.
-        return j2n, tuple(np.zeros(len(r_in)) for _ in range(5))
-    if tof_order == 7:
-        ig = None
-        if (_tof7_shape_cache is not None
-                and _tof7_shape_cache_nz == len(r_in)):
-            # TOF7.get_moments7 takes (s2, s4, s6, s8, s10, s12, s14) only
-            # (no s0, which is closed-form from the equal-volume condition).
-            ig = tuple(_tof7_shape_cache[1:])
-        j2n, shapes_7 = get_moments7(
-            r_in, rho_in, m_in, omega_in, initial_guess=ig
-        )
-        # TOF7 now returns the same 8-element j2n as TOF4 (J_10..J_14 are no
-        # longer computed by default). We still cache the full 8-tuple of
-        # shape functions for Jacobi warm-start — the higher s_{10..14} are
-        # still iterated even though their J_n are not output, so that the
-        # low-order J's retain TOF7's accuracy advantage over TOF4.
-        _tof7_shape_cache = shapes_7
-        _tof7_shape_cache_nz = len(r_in)
-        shapes = tuple(shapes_7[:5])  # (s0, s2, s4, s6, s8) for consumers
-        return j2n, shapes
-    else:
-        ig = None
-        if (_tof4_shape_cache is not None
-                and _tof4_shape_cache_nz == len(r_in)):
-            # TOF.get_moments takes (s2, s4, s6, s8) only (no s0 — it's
-            # closed-form from Nettelmann 2017 eq. (25) after Jacobi converges).
-            ig = tuple(_tof4_shape_cache[1:5])
-        j2n, shapes = get_moments(
-            r_in, rho_in, m_in, omega_in, initial_guess=ig
-        )
-        _tof4_shape_cache = shapes
-        _tof4_shape_cache_nz = len(r_in)
-        return j2n, shapes
+    ig = None
+    if (_tof4_shape_cache is not None
+            and _tof4_shape_cache_nz == len(r_in)):
+        # TOF.get_moments takes (s2, s4, s6, s8) only (no s0 — it's
+        # closed-form from Nettelmann 2017 eq. (25) after Jacobi converges).
+        ig = tuple(_tof4_shape_cache[1:5])
+    j2n, shapes = get_moments(
+        r_in, rho_in, m_in, omega_in, initial_guess=ig
+    )
+    _tof4_shape_cache = shapes
+    _tof4_shape_cache_nz = len(r_in)
+    return j2n, shapes
 
 
 # ------------------ CORE PARAMETERS --------------------------------- #
@@ -522,13 +450,10 @@ def hydrostatic_equilibrium(
     itr : int
         Number of iterations to convergence.
     """
-    # Fresh evolution runs (init=True) clear any stale TOF warm-start caches
-    # (both TOF4 and TOF7) and re-arm the rotation breakup one-shot diagnostic
-    # in get_omega.
+    # Fresh evolution runs (init=True) clear any stale TOF warm-start cache
+    # and re-arm the rotation breakup one-shot diagnostic in get_omega.
     if init:
         _tof4_reset_cache()
-        _tof7_reset_cache()
-        _cms_reset_cache()
         _reset_breakup_check()
 
     # Sentinel normalization:

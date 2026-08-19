@@ -11,19 +11,17 @@ ORCHARD (Tejada Arevalo et al. 2026b) is a public, general-purpose planetary int
 v0.2.0 is the first fully open release of ORCHARD. The previous version (v0.1.0, the version submitted with the ORCHARD paper) was deposited on Zenodo with restricted file access during peer review. Changes since v0.1.0:
 
 - **Metal (Z) rain**: a heavy-element miscibility channel paralleling helium rain — selectable miscibility curves, independent temperature/pressure offsets, supersaturation-responsive rain-zone diffusion, and a deep-pressure activation cap (`zmisc_p_max`).
-- **Concentric Maclaurin Spheroid (CMS) gravity backend** for gravitational harmonics, alongside the Theory of Figures; corrected moment-of-inertia integral in TOF4; J6 now computed and plotted.
+- **Gravity-harmonics improvements**: corrected moment-of-inertia integral in TOF4; J6 now computed and plotted.
 - **Double-diffusive (Spruit-type) full-Ledoux semiconvection option** for composition-gradient transport.
 - **Rock-fraction-aware EOS support ([EOS v2.0](https://doi.org/10.5281/zenodo.21812109))**: aquarock water-rock core EOS, continuous water/rock core composition (`f_rock_core`), rock-mixture envelope options; fixed core EOS evaluation for rock fractions other than 0.5.
 - **More robust initial models**: the RK4 initial-structure builder handles cored gas giants; fixed an RK4 substep density bug; fixed the rotating-initialization breakup check.
-- **New convection and irradiation options**: composition overshoot (Herwig-style), smoothed convection criterion, experimental convective entrainment and rotation-modified convective velocities (Fuentes et al. 2023), extrapolated-endpoint stellar irradiation penetration.
+- **New convection and irradiation options**: smoothed convection criterion, extrapolated-endpoint stellar irradiation penetration.
 - **Energy-accounting overhaul**: consistent lost-energy ledger, rotational kinetic energy tracked, optional midpoint gravity centering in the hydrostatic solver, optional second-order time-centered heat metering, plus an energy-conservation methods writeup.
 - **Solver robustness**: adaptive Henyey under-relaxation, density- and temperature-inversion guards with optional post-step repair, a timestep stall guard (`dt_abort_myr`), fixed early-age high-resolution timestepping, fixed retry accounting in the adaptive timestepper.
 - **Bug fixes**: radiogenic heating now referenced to present-day abundances; radius-coordinate profile ordering fix; regression fixes across all public examples found in a pre-release sweep.
-- **Magnetic Reynolds number diagnostics** for dynamo studies.
 - **Large behavior-preserving refactor** of the evolution, transport, hydrostatic, and atmosphere-BC modules (bit-identical outputs verified), including dead-code removal and a documented transport-result interface.
 - **Documentation and support**: an FAQ, Windows install notes, a fully audited `parameter_descriptions.md`, published methods writeups, and an experimental documentation assistant (`docs_bot`) with a GitHub Actions issue responder.
-- **Three new tutorials** — a getting-started on-ramp (`tutorial_getting_started.ipynb`), static structure models without evolution (`tutorial_static_structures.ipynb`), and gravity harmonics with a Militzer & Hubbard (2024) validation (`tutorial_gravity_harmonics.ipynb`) — bringing the tutorial set to nine, with expanded struct-profile and EOS-comparison material and exercises throughout.
-- **CMS gravity backend and MH24 validation suite**: a clean-room Concentric Maclaurin Spheroid solver (`utils/cms_hubbard.py`, `gravity_method = cms`) alongside ToF4/ToF7, validated against the nine published Militzer & Hubbard (2024) Jupiter models in `validation/mh24/`.
+- **Two new tutorials** — a getting-started on-ramp (`tutorial_getting_started.ipynb`) and static structure models without evolution (`tutorial_static_structures.ipynb`) — bringing the tutorial set to eight, with expanded struct-profile and EOS-comparison material and exercises throughout.
 
 ## Getting Started
 
@@ -252,11 +250,10 @@ We recommend working through the tutorials in this order:
 2. `tutorials/tutorial_model_plotting.ipynb` — Plotting and visualization
 3. `tutorials/tutorial_eos.ipynb` — Equation of state exploration
 4. `tutorials/tutorial_static_structures.ipynb` — Static structure models (no evolution)
-5. `tutorials/tutorial_gravity_harmonics.ipynb` — Gravity harmonics: ToF7, CMS, and the MH24 validation
-6. `tutorials/tutorial_inhomogeneous_evolution.ipynb` — Non-uniform composition profiles
-7. `tutorials/tutorial_solarsystem_planets.ipynb` — Jupiter, Saturn, Uranus, Neptune
-8. `tutorials/tutorial_subneptunes_superearths.ipynb` — Sub-Neptune and super-Earth workflows
-9. `tutorials/tutorial_superjupiters.ipynb` — Exoplanet super-Jupiter modeling
+5. `tutorials/tutorial_inhomogeneous_evolution.ipynb` — Non-uniform composition profiles
+6. `tutorials/tutorial_solarsystem_planets.ipynb` — Jupiter, Saturn, Uranus, Neptune
+7. `tutorials/tutorial_subneptunes_superearths.ipynb` — Sub-Neptune and super-Earth workflows
+8. `tutorials/tutorial_superjupiters.ipynb` — Exoplanet super-Jupiter modeling
 
 ## Repository Layout
 
@@ -275,10 +272,9 @@ Supporting directories:
 - `conductivities/` — Thermal conductivity models
 - `atmospheres/` — Atmosphere boundary condition tables
 - `opacities/` — Opacity tables for transport and transit-radius utilities
-- `utils/` — Shared utilities: constants, config parsing, TOF, diffusion coefficients, profiles, seismology, adaptive regridding
+- `utils/` — Shared utilities: constants, config parsing, TOF, diffusion coefficients, profiles, adaptive regridding
 - `parameter_examples/` — Example run configurations
 - `tutorials/` — Jupyter notebook tutorials
-- `validation/` — Gravity-harmonics validation against Militzer & Hubbard (2024), including their published Jupiter models
 
 ## Support and License
 

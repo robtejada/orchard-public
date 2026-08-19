@@ -24,7 +24,6 @@ parameters/*
 !tutorial_superjupiters.ipynb
 !tutorial_static_structures.ipynb
 !tutorial_getting_started.ipynb
-!tutorial_gravity_harmonics.ipynb
 *.ipynb_checkpoints/
 plot_class.py
 mass_loss.py
@@ -168,30 +167,15 @@ parameter_examples/parameter_user_super_earth_15Mearth_thinenv_example.ini
 orchard-v0.1.0-rc1.tar.gz
 atmospheres/T10_vs_Tint_logg_albedo.csv
 
-# MH24 (Militzer & Hubbard 2024) Jupiter J_n reproducibility study.
-# Throwaway comparison scripts + downloaded Zenodo data + outputs — NOT committed
-# (data is reproducible via validation/mh24/fetch_mh24_data.py).
-# EXCEPTION: a future CMS-method module (cms_*.py) is kept committable.
-validation/*
-# ...but ship the MH24 gravity-harmonics validation suite (used by
-# tutorials/tutorial_gravity_harmonics.ipynb; data from Militzer 2024,
-# doi:10.5281/zenodo.10471389).
-!validation/offline_tof7.py
-!validation/mh24/
-!validation/mh24/**
-validation/mh24/__pycache__/
-validation/mh24/results/figs/
+validation/
 audit_v2_findings.md
 audit_v2_tracker.html
 LANDSCAPE_RESULTS.md
 !orchard_paper_v1.pdf
-parameters_jupiter_rotation/*
-parameters_jupfit*
-writeups/jupfit_campaign/*
-parameters_saturn_misc*
-# Campaign/test parameter directories are local-only (RTA 2026-08-08):
+# Campaign/test parameter directories are local-only:
 # never track any parameters_* directory. parameter_examples/ and
 # parameters_default.ini remain the only committed parameter sources.
 parameters_*/
-# kinetic-energy-convection writeup: local-only per RTA (2026-08-08)
+# Local-only writeup drafts.
+writeups/jupfit_campaign/
 writeups/kinetic_energy_convection/

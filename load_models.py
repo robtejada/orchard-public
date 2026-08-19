@@ -1518,25 +1518,6 @@ class ModelSet:
                 mf = np.full_like(out["S"], -1.0, dtype=float)
             out["melt_fraction"] = self._ensure_2d_time_by_zone(mf, nz_guess=nz)
 
-            # ----------- mass-loss data (optional) -----------
-            ml = h5_read(keys=("Mdot", "mass_loss/Mdot"), basenames=("Mdot",), default=None)
-            if ml is not None:
-                # HDF5 stores individual scalars per snapshot; assemble timeseries
-                out["Mdot"] = np.atleast_1d(ml).flatten()
-                m_env = h5_read(keys=("M_env",), basenames=("M_env",), default=None)
-                out["M_env"] = np.atleast_1d(m_env).flatten() if m_env is not None else None
-                m_pl = h5_read(keys=("M_planet_current",), basenames=("M_planet_current",), default=None)
-                out["M_planet_current"] = np.atleast_1d(m_pl).flatten() if m_pl is not None else None
-                l_adv = h5_read(keys=("L_adv",), basenames=("L_adv",), default=None)
-                out["L_adv"] = np.atleast_1d(l_adv).flatten() if l_adv is not None else None
-            elif txt_exists("mass_loss_data.txt"):
-                ml_arr = self._txt_read_array(txt_path("mass_loss_data.txt"))
-                if ml_arr is not None and ml_arr.ndim == 2 and ml_arr.shape[1] >= 5:
-                    out["Mdot"] = ml_arr[:, 1]
-                    out["M_env"] = ml_arr[:, 2]
-                    out["M_planet_current"] = ml_arr[:, 3]
-                    out["L_adv"] = ml_arr[:, 4]
-
             # ----------- per-step core boundary indices -----------
             # Time-resolved kcore(t) / kcore_fe(t) written by the evolution HDF5
             # saver.  Lets a run track a migrating boundary directly

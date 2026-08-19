@@ -26,8 +26,8 @@ and the docstrings of the user-facing modules — **intersected with the files g
 actually tracks**.
 
 That git-tracked intersection is the safety guarantee: the public bot only ever
-indexes **committed** files, so it cannot leak uncommitted/WIP material (e.g. the
-`writeups/hackathon/` draft) or cite files a fresh clone wouldn't have, and any
+indexes **committed** files, so it cannot leak uncommitted/WIP material or cite
+files a fresh clone wouldn't have, and any
 gitignored example configs are skipped automatically. `build_corpus.py` reports
 how many matched files it skipped for this reason.
 

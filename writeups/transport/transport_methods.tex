@@ -1266,8 +1266,7 @@ The semiconvective flux contributes \emph{no} Jacobian terms (2026
 July rework): with the Nusselt coefficients frozen at their
 old-state, time-lagged values, $F_{\rm semi}$ is treated as a
 lagged (Picard) term --- exact in the residual, absent from
-$\mathbf{J}$ --- the same consistent inexact-Newton scheme used for
-the convective-entrainment and composition-overshoot diffusivities.
+$\mathbf{J}$ --- a consistent inexact-Newton scheme.
 The previous hand-derived entries were finite-difference--verified
 to be correct at semiconvectively \emph{active} faces but carried
 no gate on the $\max(\nabla_{\!S},0)$ bracket clamp, so at clamped

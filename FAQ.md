@@ -34,8 +34,8 @@ ORCHARD evolves the thermal and compositional structure of planets from
 ~0.5 Earth masses to 10+ Jupiter masses over gigayear timescales. It solves
 hydrostatic equilibrium (Henyey relaxation) coupled to thermal/compositional
 transport, and supports helium rain, heavy-element (Z) miscibility, fuzzy/dilute
-cores, viscous mantle convection, radiogenic heating, rotation with gravitational
-harmonics, and seismic modes. It covers gas giants, ice giants, sub-Neptunes, and
+cores, viscous mantle convection, radiogenic heating, and rotation with
+gravitational harmonics. It covers gas giants, ice giants, sub-Neptunes, and
 super-Earths.
 
 **Q: How do I install it?**
@@ -191,7 +191,8 @@ Uranus/Neptune). See `parameter_user_saturn_homog_noherain.ini`,
 **Q: How do I get gravitational harmonics (J2, J4) to compare with Juno/Cassini?**
 Enable rotation; the Theory-of-Figures machinery then outputs `J2, J4, J6, J8`,
 oblateness, and equatorial/polar radii. See `parameter_descriptions.md` for the
-rotation settings and the `*_rot*` example files. Note: for accurate standalone
+`[hydrostatic_equilibrium]` rotation settings (`rotation`, `tof_calc`, `C_MoI`,
+`period`). Note: for accurate standalone
 gravitational moments the rotating hydrostatic solution should be iterated to
 self-consistency (a single pass over-inflates J2 by ~7%).
 

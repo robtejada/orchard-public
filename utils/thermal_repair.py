@@ -1,6 +1,6 @@
 """Post-step repair of unphysical temperature inversions in the envelope.
 
-Motivation (2026-07-08 jupfit campaign): during Z/He-rain eras the transport
+Motivation: during Z/He-rain eras the transport
 Newton-Raphson frequently exits through its stalled-accept hatch or the
 max-iteration cap (mean niter ~32, ~29% of steps at >=30 iterations in the
 rain window vs ~5 pre-onset), and the systematically under-converged entropy
