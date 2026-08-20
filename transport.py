@@ -1736,8 +1736,13 @@ def update_SYZ(
     # derivatives at min(Z, cap) retains their saturated physical values;
     # the neglected piece is O((1-Z)ln(1-Z)) because every composition
     # derivative multiplies gradients/changes of the vanishing H-He
-    # minority.  Production envelopes (Z <~ 0.5) and ice-giant profiles
-    # (Z <~ 0.95) sample below the cap and are unaffected.
+    # minority.  Production envelopes (Z <~ 0.5) sample below the cap and
+    # are unaffected.  CAUTION: inhomogeneous ice-giant profiles can build
+    # deep-envelope Z ~ 0.98 ABOVE the cap; freezing their Ledoux/Jacobian
+    # derivatives at the cap value makes the Newton solve dramatically
+    # stiffer through convective-overturn epochs (timestep collapse).  Such
+    # models should set [transport] eos_deriv_z_cap = 1.0 (cap disabled) --
+    # see the Uranus/Neptune inhomogeneous example configs.
     Zold_d = np.minimum(Zold, eos_deriv_z_cap)
     Zold_d_i = np.minimum(Zold_i, eos_deriv_z_cap)
 
