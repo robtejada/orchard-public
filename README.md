@@ -31,7 +31,7 @@ Install [Conda](https://docs.conda.io/) (Miniconda or Anaconda).
 
 We highly recommend installing `orchard` v0.2.0 from the Zenodo release archive from [Zenodo](https://doi.org/10.5281/zenodo.19829061). This version is the same as the one released here under orhcard-public. Zenodo is recommended because the equation of state (EOS) submodule is quite large (~30 GB, compressed), so cloning through GitHub consumes Git LFS space, which is limited. 
 
-xtract orchard and set up the environment likeso:
+Extract orchard and set up the environment likeso:
 
 ```bash
 unzip orchard-v0.2.0.zip
