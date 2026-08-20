@@ -27,7 +27,7 @@ PUBLIC_SOURCES = [
     ("FAQ.md", "faq"),
     ("parameter_descriptions.md", "parameters"),
     ("writeups/**/*.tex", "writeup"),       # method writeups; tracked-filter drops the WIP draft
-    ("tutorials/*.ipynb", "tutorial"),
+    ("tutorial_*.ipynb", "tutorial"),
     ("parameter_examples/*.ini", "example"),
     # API docstrings from the user-facing modules (module + def/class docstrings):
     ("evolution.py", "api"),

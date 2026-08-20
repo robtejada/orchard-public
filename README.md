@@ -11,15 +11,11 @@ ORCHARD (Tejada Arevalo et al. 2026b) is a public, general-purpose planetary int
 v0.2.0 is the first fully open release of ORCHARD. The previous version (v0.1.0, the version submitted with the ORCHARD paper) was deposited on Zenodo with restricted file access during peer review. Changes since v0.1.0:
 
 - **Metal (Z) rain**: a heavy-element miscibility channel paralleling helium rain — selectable miscibility curves, independent temperature/pressure offsets, supersaturation-responsive rain-zone diffusion, and a deep-pressure activation cap (`zmisc_p_max`).
-- **Gravity-harmonics improvements**: corrected moment-of-inertia integral in TOF4; J6 now computed and plotted.
-- **Double-diffusive (Spruit-type) full-Ledoux semiconvection option** for composition-gradient transport.
-- **Rock-fraction-aware EOS support ([EOS v2.0](https://doi.org/10.5281/zenodo.21812109))**: aquarock water-rock core EOS, continuous water/rock core composition (`f_rock_core`), rock-mixture envelope options; fixed core EOS evaluation for rock fractions other than 0.5.
-- **More robust initial models**: the RK4 initial-structure builder handles cored gas giants; fixed an RK4 substep density bug; fixed the rotating-initialization breakup check.
-- **New convection and irradiation options**: smoothed convection criterion, extrapolated-endpoint stellar irradiation penetration.
+- **Gravity-harmonics improvements**: corrected moment-of-inertia integral in TOF4.
+- **Rock-fraction-aware EOS support ([EOS v2.0](https://doi.org/10.5281/zenodo.21812109))**: aquarock water-rock core EOS, continuous water/rock core composition (`f_rock_core`), rock-mixture envelope options; fixed core EOS evaluation for rock fractions other than 0.5. THIS FEATURE IS ONLY AVAILABLE THROUGH THE ZENODO EOS MODULE. It's too large to include in the GitHub repository.
+- **More reliable initial models**: the RK4 initial-structure builder handles cored gas giants; fixed an RK4 substep density bug; fixed the rotating-initialization breakup check.
 - **Energy-accounting overhaul**: consistent lost-energy ledger, rotational kinetic energy tracked, optional midpoint gravity centering in the hydrostatic solver, optional second-order time-centered heat metering, plus an energy-conservation methods writeup.
 - **Solver robustness**: adaptive Henyey under-relaxation, density- and temperature-inversion guards with optional post-step repair, a timestep stall guard (`dt_abort_myr`), fixed early-age high-resolution timestepping, fixed retry accounting in the adaptive timestepper.
-- **Bug fixes**: radiogenic heating now referenced to present-day abundances; radius-coordinate profile ordering fix; regression fixes across all public examples found in a pre-release sweep.
-- **Large behavior-preserving refactor** of the evolution, transport, hydrostatic, and atmosphere-BC modules (bit-identical outputs verified), including dead-code removal and a documented transport-result interface.
 - **Documentation and support**: an FAQ, Windows install notes, a fully audited `parameter_descriptions.md`, published methods writeups, and an experimental documentation assistant (`docs_bot`) with a GitHub Actions issue responder.
 - **Two new tutorials** — a getting-started on-ramp (`tutorial_getting_started.ipynb`) and static structure models without evolution (`tutorial_static_structures.ipynb`) — bringing the tutorial set to eight, with expanded struct-profile and EOS-comparison material and exercises throughout.
 
@@ -33,7 +29,9 @@ Install [Conda](https://docs.conda.io/) (Miniconda or Anaconda).
 
 ### Install from Zenodo (recommended)
 
-After downloading the latest ORCHARD release archive from [Zenodo](https://doi.org/10.5281/zenodo.19829061), extract it and set up the environment:
+We highly recommend installing `orchard` v0.2.0 from the Zenodo release archive from [Zenodo](https://doi.org/10.5281/zenodo.19829061). This version is the same as the one released here under orhcard-public. Zenodo is recommended because the equation of state (EOS) submodule is quite large (~30 GB, compressed), so cloning through GitHub consumes Git LFS space, which is limited. 
+
+xtract orchard and set up the environment likeso:
 
 ```bash
 unzip orchard-v0.2.0.zip
@@ -43,9 +41,9 @@ conda activate orchard_env
 python setup_eos.py
 ```
 
-`setup_eos.py` downloads the ~30 GB of equation-of-state tables from the [EOS Zenodo record](https://doi.org/10.5281/zenodo.10659248). That link is the permanent *concept* DOI: `setup_eos.py` resolves it to the newest published version at download time, currently **EOS v2.0** ([10.5281/zenodo.21812109](https://doi.org/10.5281/zenodo.21812109)). No additional manual downloads are required, and the command does not change when a new EOS version is deposited.
+`setup_eos.py` downloads the ~30 GB of EOS tables from the [EOS Zenodo record](https://doi.org/10.5281/zenodo.10659248). That link is the permanent *concept* DOI. `setup_eos.py` will download the newest published version at download time, currently **EOS v2.0** ([10.5281/zenodo.21812109](https://doi.org/10.5281/zenodo.21812109)). No additional manual downloads are required, and the command does not change when a new EOS version is deposited.
 
-### Install from GitHub (developers)
+### Install from GitHub (developers; skip if installed from Zenodo)
 
 To clone the source repository directly instead:
 
@@ -149,12 +147,12 @@ For a full description of every parameter, see `parameter_descriptions.md`.
 
 | Planet type | Example config | Tutorial |
 |------------|---------------|----------|
-| 1 $M_J$ Jupiter | `parameter_examples/parameter_user.ini` | `tutorials/tutorial_model_plotting.ipynb` |
-| Jupiter (He rain) | `parameter_examples/parameter_user_jup_herain.ini` | `tutorials/tutorial_solarsystem_planets.ipynb` |
-| Saturn (He rain) | `parameter_examples/parameter_user_saturn_herain.ini` | `tutorials/tutorial_solarsystem_planets.ipynb` |
-| Super-Jupiter | `parameter_examples/parameter_user_super_jupiter.ini` | `tutorials/tutorial_superjupiters.ipynb` |
-| 10 $M_\oplus$ sub-Neptune | `parameter_examples/parameter_user_sub_neptune_10Mearth_example.ini` | `tutorials/tutorial_subneptunes_superearths.ipynb` |
-| 3 $M_\oplus$ super-Earth | `parameter_examples/parameter_user_super_earth_3Mearth_bare_example.ini` | `tutorials/tutorial_subneptunes_superearths.ipynb` |
+| 1 $M_J$ Jupiter | `parameter_examples/parameter_user.ini` | `tutorial_model_plotting.ipynb` |
+| Jupiter (He rain) | `parameter_examples/parameter_user_jup_herain.ini` | `tutorial_solarsystem_planets.ipynb` |
+| Saturn (He rain) | `parameter_examples/parameter_user_saturn_herain.ini` | `tutorial_solarsystem_planets.ipynb` |
+| Super-Jupiter | `parameter_examples/parameter_user_super_jupiter.ini` | `tutorial_superjupiters.ipynb` |
+| 10 $M_\oplus$ sub-Neptune | `parameter_examples/parameter_user_sub_neptune_10Mearth_example.ini` | `tutorial_subneptunes_superearths.ipynb` |
+| 3 $M_\oplus$ super-Earth | `parameter_examples/parameter_user_super_earth_3Mearth_bare_example.ini` | `tutorial_subneptunes_superearths.ipynb` |
 
 #### Setting planet mass
 
@@ -244,16 +242,16 @@ The CLI also supports hot-reloading modules with `reload <module>` without resta
 
 ## Tutorials
 
-We recommend working through the tutorials in this order:
+The tutorial notebooks live at the repository root (so they can be run in place without path juggling). We recommend working through them in this order:
 
-1. `tutorials/tutorial_getting_started.ipynb` — Start here: first run, console output, loading results
-2. `tutorials/tutorial_model_plotting.ipynb` — Plotting and visualization
-3. `tutorials/tutorial_eos.ipynb` — Equation of state exploration
-4. `tutorials/tutorial_static_structures.ipynb` — Static structure models (no evolution)
-5. `tutorials/tutorial_inhomogeneous_evolution.ipynb` — Non-uniform composition profiles
-6. `tutorials/tutorial_solarsystem_planets.ipynb` — Jupiter, Saturn, Uranus, Neptune
-7. `tutorials/tutorial_subneptunes_superearths.ipynb` — Sub-Neptune and super-Earth workflows
-8. `tutorials/tutorial_superjupiters.ipynb` — Exoplanet super-Jupiter modeling
+1. `tutorial_getting_started.ipynb` — Start here: first run, console output, loading results
+2. `tutorial_model_plotting.ipynb` — Plotting and visualization
+3. `tutorial_eos.ipynb` — Equation of state exploration
+4. `tutorial_static_structures.ipynb` — Static structure models (no evolution)
+5. `tutorial_inhomogeneous_evolution.ipynb` — Non-uniform composition profiles
+6. `tutorial_solarsystem_planets.ipynb` — Jupiter, Saturn, Uranus, Neptune
+7. `tutorial_subneptunes_superearths.ipynb` — Sub-Neptune and super-Earth workflows
+8. `tutorial_superjupiters.ipynb` — Exoplanet super-Jupiter modeling
 
 ## Repository Layout
 
@@ -274,7 +272,7 @@ Supporting directories:
 - `opacities/` — Opacity tables for transport and transit-radius utilities
 - `utils/` — Shared utilities: constants, config parsing, TOF, diffusion coefficients, profiles, adaptive regridding
 - `parameter_examples/` — Example run configurations
-- `tutorials/` — Jupyter notebook tutorials
+- `tutorial_*.ipynb` — Jupyter notebook tutorials (repository root)
 
 ## Support and License
 

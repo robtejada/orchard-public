@@ -9,7 +9,7 @@ written for newcomers from four communities — **gas-giant exoplanets**,
 
 > **Can't find your answer here?** See [Getting help](#getting-help) at the
 > bottom. In short: search/ask the docs assistant, browse `parameter_examples/`
-> and `tutorials/`, read `parameter_descriptions.md`, and if you're still stuck,
+> and the `tutorial_*.ipynb` notebooks (repository root), read `parameter_descriptions.md`, and if you're still stuck,
 > open a **GitHub Issue** (bug/feature) or a **GitHub Discussion** (usage question).
 
 ---
@@ -66,7 +66,7 @@ self-explanatory (e.g., `parameter_user_2mj.ini`,
 `parameter_user_sub_neptune_6Mearth_example.ini`,
 `parameter_user_super_earth_3Mearth_bare_example.ini`,
 `parameter_user_saturn_herain.ini`). Every parameter is documented in
-`parameter_descriptions.md`, and the `tutorials/` notebooks walk through full
+`parameter_descriptions.md`, and the `tutorial_*.ipynb` notebooks (repository root) walk through full
 workflows.
 
 ---
@@ -82,7 +82,7 @@ super-Jupiters — and set `planet` accordingly (`Jupiter`, `Super_Jupiter`).
 Irradiation/clouds are toggles for the `c23`/`c26` models. Start from
 `parameter_examples/parameter_user_super_jupiter*.ini` or the `*mj.ini` series
 (`parameter_user_1mj.ini` … `parameter_user_10mj.ini`), and see the
-**`tutorials/tutorial_superjupiters.ipynb`** notebook.
+**`tutorial_superjupiters.ipynb`** notebook.
 
 **Q: What's a "hot start" vs "cold start", and how do I set the initial entropy?**
 Initial specific entropy is `S_ini` in `[initial]`, in units of k_B/baryon.
@@ -96,7 +96,7 @@ In `[diffusion]`, set `composition_change = True` and `helium_rain = True`, pick
 miscibility curve with `misc_curve` (e.g., `lorenzen`, `schoettler`), and control
 the rain vigor with `alpha_herain`. See `parameter_user_jup_herain.ini` and
 `parameter_user_saturn_herain.ini`, and the
-**`tutorials/tutorial_inhomogeneous_evolution.ipynb`** notebook.
+**`tutorial_inhomogeneous_evolution.ipynb`** notebook.
 
 **Q: Can I add a heavy-element core or a dilute/fuzzy core?**
 Yes. A compact core mass is set with `mass_core` in `[core]`. For dilute cores and
@@ -124,7 +124,7 @@ interior with `mass_core` and the iron core with `mass_core_fe` (both Earth
 masses), and use `bc_atm = f07` (Fortney et al. 2007) with an equilibrium
 temperature `T_eq`. Start from
 `parameter_examples/parameter_user_sub_neptune_6Mearth_example.ini` and see
-**`tutorials/tutorial_subneptunes_superearths.ipynb`**.
+**`tutorial_subneptunes_superearths.ipynb`**.
 
 **Q: How do I set the envelope mass fraction?**
 The envelope mass is the total minus the core: (`M_Mearth` − `mass_core`). The
@@ -186,7 +186,7 @@ use the documented sentinel values (see `parameter_descriptions.md`).
 **Q: Can I model Jupiter, Saturn, Uranus, and Neptune?**
 Yes. Set `planet` and `bc_atm` (`c23` for Jupiter/Saturn; `g75`, Guillot 1995, for
 Uranus/Neptune). See `parameter_user_saturn_homog_noherain.ini`,
-`parameter_user_neptune.ini`, and **`tutorials/tutorial_solarsystem_planets.ipynb`**.
+`parameter_user_neptune.ini`, and **`tutorial_solarsystem_planets.ipynb`**.
 
 **Q: How do I get gravitational harmonics (J2, J4) to compare with Juno/Cassini?**
 Enable rotation; the Theory-of-Figures machinery then outputs `J2, J4, J6, J8`,
@@ -251,7 +251,7 @@ m = load_models.ModelSet(paths=["<your.ini>"])[0]
 T = m['temp'].age(4.56, units='Gyr')   # temperature profile at 4.56 Gyr
 snap = m.snapshot(age=4.0, units='Gyr')
 ```
-See **`tutorials/tutorial_model_plotting.ipynb`**.
+See **`tutorial_model_plotting.ipynb`**.
 
 **Q: What quantities are available?**
 Profiles (radius, pressure, density, temperature, entropy `S`, `Y`, `Z`,
@@ -294,7 +294,7 @@ Browse `parameter_examples/` — files are named by planet type, mass, and physi
 ## Getting help
 
 If this FAQ, `parameter_descriptions.md`, the `parameter_examples/`, and the
-`tutorials/` don't resolve your question:
+the tutorial notebooks don't resolve your question:
 
 1. **Ask the docs assistant** (if deployed on the ORCHARD website / repo) — it
    answers from this FAQ, the parameter docs, the tutorials, and the examples, and

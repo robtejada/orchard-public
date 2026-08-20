@@ -1468,10 +1468,7 @@ def update_SYZ(
     Lambda_rad_i = np.zeros_like(T_i)
     if radiation and env_int_end > 0:
         c = const.c
-        if opac == 'water_rich':
-            import water_rich_opac as h2o_opac
-            ross_k_i = 10 ** h2o_opac.get_kappa_R(np.log10(P_i[env_int]), np.log10(T_i[env_int]), np.log10(Zold_i[env_int]))
-        elif opac == 'default':
+        if opac == 'default':
             ross_k_i = 10 ** k_interp((np.log10(T_i[env_int]), np.log10(rho_i[env_int])))
         else:  # opac == 'metal_rich'
             f_Z = z_to_metallicity_factor(np.clip(Zold_i[env_int], 0.0, 1.0 - 1e-12), const.Z_SOLAR_FORTNEY07)
