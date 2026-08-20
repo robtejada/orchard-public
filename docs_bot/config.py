@@ -31,6 +31,7 @@ PUBLIC_SOURCES = [
     ("parameter_examples/*.ini", "example"),
     # API docstrings from the user-facing modules (module + def/class docstrings):
     ("evolution.py", "api"),
+    ("static.py", "api"),
     ("initial.py", "api"),
     ("transport.py", "api"),
     ("hydrostatic.py", "api"),

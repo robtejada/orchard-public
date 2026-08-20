@@ -133,7 +133,23 @@ if Mcore_Me > M_factor:
         f'Mcore ({Mcore_Me:.5f} Mearth) cannot be less than M_factor ({M_factor:.5f} Mearth).'
     )
 
-if mantle_comp =='mgsio3':
+# --- Cache the mantle/core EOS objects across module reloads (same builtins
+# pattern as the H-He-Z mixtures cache below). Rebuilding them costs seconds
+# and is only needed when one of their config inputs changes; builtins
+# survives importlib.reload, so re-imports with unchanged inputs (e.g. from
+# orchard_cli or static.build) reuse the existing objects. ---
+_mantle_core_key = (mantle_comp, eos_mantle,
+                    config['core'].getfloat('f_rock_core', fallback=0.5),
+                    core_comp, eos_core)
+_mantle_core_cached = (
+    getattr(builtins, "_APPLE_prev_mantle_core_key", None) == _mantle_core_key)
+if _mantle_core_cached:
+    mantle_eos = builtins._APPLE_mantle_eos
+    core_eos = builtins._APPLE_core_eos
+
+if _mantle_core_cached:
+    pass
+elif mantle_comp =='mgsio3':
     if eos_mantle == 'comb':
         from eos import mgsio3_comb_eos
         mantle_eos = mgsio3_comb_eos.MGSIO3_COMBINED_EOS()
@@ -179,9 +195,11 @@ elif mantle_comp == 'aquarock':
 
 
 # Initializing core EOS calls
-if core_comp == 'Fe_alloy':
+if _mantle_core_cached:
+    pass
+elif core_comp == 'Fe_alloy':
     from eos import fesi16_eos as core_eos # loading Fischer et al. 2012 iron alloy eos
-elif core_comp == 'Fe_pure': 
+elif core_comp == 'Fe_pure':
     if eos_core == 'I14':
         # loading Ichikawa et al. 2014 pure liquid iron eos
         from eos import ichikawa_iron_eos as iron_eos
@@ -208,6 +226,12 @@ elif core_comp == 'Fe_pure':
     
 else:
     raise Exception('Invalid core_comp choice in parameter file; choices are Fe_liquid or Fe_alloy.')
+
+# Store the (possibly fresh) mantle/core EOS objects for reuse on reload.
+if not _mantle_core_cached:
+    builtins._APPLE_mantle_eos = mantle_eos
+    builtins._APPLE_core_eos = core_eos
+    builtins._APPLE_prev_mantle_core_key = _mantle_core_key
 
 initial_profiles_S = str(config['initial']['initial_profiles_S'])
 initial_profiles_Y = str(config['initial']['initial_profiles_Y'])

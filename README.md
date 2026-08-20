@@ -1,23 +1,23 @@
-# ORCHARD: A General Planetary Evolution Code [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19829061.svg)](https://doi.org/10.5281/zenodo.19829061)
+# ORCHARD: A General Planetary Evolution Code [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22035834.svg)](https://doi.org/10.5281/zenodo.22035834)
 
 [![ORCHARD logo](orchard_logo.png)](orchard_logo.png)
 
 ORCHARD (Tejada Arevalo et al. 2026b) is a public, general-purpose planetary interior structure and evolution code derived from APPLE ([Sur et al. 2024](https://iopscience.iop.org/article/10.3847/1538-4357/ad57c3)). It models the thermal and compositional evolution of planets over Gyr timescales, solving for hydrostatic structure via Henyey relaxation and for coupled thermal/compositional transport with helium rain modeled with diffusion-advection. While the gas-giant evolution part of the code is inherited from APPLE, the rocky-planet evolution code is inspired by the CMAPPER evolution code ([Zhang et al. 2022](https://iopscience.iop.org/article/10.3847/1538-4357/ac8e65)). CMAPPER is found [here](https://github.com/zhangjis/CMAPPER_rock).
 
-**Current release: v0.2.0** — the first full public release. See [What's new in v0.2.0](#whats-new-in-v020).
+**Current release: v0.2.0**, the first full public release. See [What's new in v0.2.0](#whats-new-in-v020).
 
 ## What's new in v0.2.0
 
 v0.2.0 is the first fully open release of ORCHARD. The previous version (v0.1.0, the version submitted with the ORCHARD paper) was deposited on Zenodo with restricted file access during peer review. Changes since v0.1.0:
 
-- **Metal (Z) rain**: a heavy-element miscibility channel paralleling helium rain — selectable miscibility curves, independent temperature/pressure offsets, supersaturation-responsive rain-zone diffusion, and a deep-pressure activation cap (`zmisc_p_max`).
+- **Metal (Z) rain**: a heavy-element miscibility channel that parallels helium rain, with selectable miscibility curves, independent temperature/pressure offsets, supersaturation-responsive rain-zone diffusion, and a deep-pressure activation cap (`zmisc_p_max`).
 - **Gravity-harmonics improvements**: corrected moment-of-inertia integral in TOF4.
 - **Rock-fraction-aware EOS support ([EOS v2.0](https://doi.org/10.5281/zenodo.21812109))**: aquarock water-rock core EOS, continuous water/rock core composition (`f_rock_core`), rock-mixture envelope options; fixed core EOS evaluation for rock fractions other than 0.5. THIS FEATURE IS ONLY AVAILABLE THROUGH THE ZENODO EOS MODULE. It's too large to include in the GitHub repository.
 - **More reliable initial models**: the RK4 initial-structure builder handles cored gas giants; fixed an RK4 substep density bug; fixed the rotating-initialization breakup check.
 - **Energy-accounting overhaul**: consistent lost-energy ledger, rotational kinetic energy tracked, optional midpoint gravity centering in the hydrostatic solver, optional second-order time-centered heat metering, plus an energy-conservation methods writeup.
 - **Solver robustness**: adaptive Henyey under-relaxation, density- and temperature-inversion guards with optional post-step repair, a timestep stall guard (`dt_abort_myr`), fixed early-age high-resolution timestepping, fixed retry accounting in the adaptive timestepper.
 - **Documentation and support**: an FAQ, Windows install notes, a fully audited `parameter_descriptions.md`, published methods writeups, and an experimental documentation assistant (`docs_bot`) with a GitHub Actions issue responder.
-- **Two new tutorials** — a getting-started on-ramp (`tutorial_getting_started.ipynb`) and static structure models without evolution (`tutorial_static_structures.ipynb`) — bringing the tutorial set to eight, with expanded struct-profile and EOS-comparison material and exercises throughout.
+- **Two new tutorials**: a getting-started notebook (`tutorial_getting_started.ipynb`) and static structure models without evolution (`tutorial_static_structures.ipynb`). The tutorial set is now eight notebooks, with more struct-profile and EOS-comparison material and exercises throughout.
 
 ## Getting Started
 
@@ -29,9 +29,9 @@ Install [Conda](https://docs.conda.io/) (Miniconda or Anaconda).
 
 ### Install from Zenodo (recommended)
 
-We highly recommend installing `orchard` v0.2.0 from the Zenodo release archive from [Zenodo](https://doi.org/10.5281/zenodo.19829061). This version is the same as the one released here under orhcard-public. Zenodo is recommended because the equation of state (EOS) submodule is quite large (~30 GB, compressed), so cloning through GitHub consumes Git LFS space, which is limited. 
+We highly recommend installing `orchard` v0.2.0 from the Zenodo release archive from [Zenodo](https://doi.org/10.5281/zenodo.22035834). This version is the same as the one released here under orchard-public. Zenodo is recommended because the equation of state (EOS) submodule is quite large (~30 GB, compressed), so cloning through GitHub consumes Git LFS space, which is limited.
 
-Extract orchard and set up the environment likeso:
+Extract orchard and set up the environment like so:
 
 ```bash
 unzip orchard-v0.2.0.zip
@@ -41,7 +41,7 @@ conda activate orchard_env
 python setup_eos.py
 ```
 
-`setup_eos.py` downloads the ~30 GB of EOS tables from the [EOS Zenodo record](https://doi.org/10.5281/zenodo.10659248). That link is the permanent *concept* DOI. `setup_eos.py` will download the newest published version at download time, currently **EOS v2.0** ([10.5281/zenodo.21812109](https://doi.org/10.5281/zenodo.21812109)). No additional manual downloads are required, and the command does not change when a new EOS version is deposited.
+`setup_eos.py` downloads the ~30 GB of EOS tables from the [EOS Zenodo record](https://doi.org/10.5281/zenodo.10659248). That link is the permanent *concept* DOI, which `setup_eos.py` resolves to the newest published version at download time (currently **EOS v2.0**, [10.5281/zenodo.21812109](https://doi.org/10.5281/zenodo.21812109)). No additional manual downloads are required, and the command does not change when a new EOS version is deposited.
 
 ### Install from GitHub (developers; skip if installed from Zenodo)
 
@@ -242,7 +242,7 @@ The CLI also supports hot-reloading modules with `reload <module>` without resta
 
 ## Tutorials
 
-The tutorial notebooks live at the repository root (so they can be run in place without path juggling). We recommend working through them in this order:
+The tutorial notebooks live at the repository root, so they import the ORCHARD modules directly and you can reload modules without restarting the notebook. We recommend working through them in this order:
 
 1. `tutorial_getting_started.ipynb` — Start here: first run, console output, loading results
 2. `tutorial_model_plotting.ipynb` — Plotting and visualization
@@ -258,6 +258,7 @@ The tutorial notebooks live at the repository root (so they can be run in place 
 Core solver modules:
 
 - `evolution.py` — Top-level driver: config, initialization, adaptive timestepping, output
+- `static.py` — One-call static (non-evolving) structures from a notebook; see `tutorial_static_structures.ipynb`
 - `initial.py` — Builds the starting model: mass mesh, EOS initialization, S/Y/Z/f_rock profiles
 - `hydrostatic.py` — Henyey relaxation solver for hydrostatic equilibrium
 - `transport.py` — Coupled Newton-Raphson solver for thermal and compositional transport
@@ -281,7 +282,7 @@ Supporting directories:
 
 ## Project Team
 
-- **Evolution Code:** Roberto Tejada Arevalo (ORCHARD), Ankan Sur (APPLE), Yubo Su (APPLE), 
+- **Evolution Code:** Roberto Tejada Arevalo (ORCHARD), Ankan Sur (APPLE), Yubo Su (APPLE)
 - **Equation of State (EOS):** Roberto Tejada Arevalo, Yubo Su
 - **Miscibility:** Roberto Tejada Arevalo, Yubo Su
 - **Boundary Conditions:** Yixian Chen, Roberto Tejada Arevalo
