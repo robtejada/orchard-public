@@ -80,10 +80,17 @@ STATIC_CASES = {
                              mass_core=0.0, mass_core_fe=0.0),
     "saturn_mass_0.3MJ": dict(M_MJup=0.3, S=6.5, Y=0.277, Z=0.02,
                               mass_core=10.0),
-    # Coreless on purpose: at 5 M_J a compact core pushes the rock EOS past
-    # its tabulated range (see tutorial_superjupiters.ipynb).
+    # Super-Jupiters are run coreless: at these masses a compact core sits
+    # beyond the default mg2sio4 mantle EOS range (see tutorial_superjupiters
+    # .ipynb). The cored case is covered by the 1 M_J model above.
     "super_jupiter_5MJ": dict(M_MJup=5.0, S=6.5, Y=0.277, Z=0.02,
                               mass_core=0.0, mass_core_fe=0.0),
+    # A cored super-Jupiter IS supported with the post-perovskite mantle,
+    # which stays tabulated to ~1.5e5 GPa; this pins that path too.
+    "super_jupiter_5MJ_ppv_core": dict(
+        M_MJup=5.0, S=6.5, Y=0.277, Z=0.02, mass_core=10.0,
+        mantle_comp="mgsio3",
+        overrides={"core": {"eos_mantle": "PPV_2"}}),
     "sub_neptune_6ME": dict(M_Mearth=6.0, S=6.0, Y=0.277, Z=0.05,
                             mass_core=5.4, mass_core_fe=1.8),
     "bare_super_earth_3ME": dict(

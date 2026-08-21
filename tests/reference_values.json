@@ -68,5 +68,10 @@
     "p_center_mbar": 789.2287881793739,
     "radius_rj": 1.076298195720201,
     "t_center_k": 65589.55133413491
+  },
+  "super_jupiter_5MJ_ppv_core": {
+    "p_center_mbar": 990.0294778344581,
+    "radius_rj": 1.0719283355875524,
+    "t_center_k": 71268.79028016425
   }
 }

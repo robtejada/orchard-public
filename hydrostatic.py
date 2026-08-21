@@ -1093,6 +1093,49 @@ def hydrostatic_equilibrium(
     _seed_and_evaluate_state(final=True)
 
     # ---------------------------------------------------------------------- #
+    # Reject a converged initial structure whose compact core sits outside the
+    # mantle/core EOS tables.  The relaxation solves for P and r with the core
+    # entropy seeded by temperature continuity with the envelope; when the
+    # core-boundary pressure is beyond the tabulated range that seeding
+    # inverts on an extrapolation, which can return an entropy far outside
+    # the table and, from it, negative temperatures.  The structure then looks
+    # converged while the whole core is unphysical, so fail here with an
+    # actionable message rather than hand back nonsense.  Only triggers on
+    # states that are already invalid, so structures that build today are
+    # unaffected.
+    # ---------------------------------------------------------------------- #
+    if init and mc > 0 and 0 <= kcore < N:
+        core_temp = temp[kcore:]
+        # Only a FINITE, non-positive temperature means the EOS was evaluated
+        # off-table: it was computed and came back unphysical. A NaN instead
+        # means the relaxation itself diverged, which the existing NaN
+        # sentinel already reports to the caller (evolution.py rejects the
+        # step; static.build retries with the other first guess), so leave
+        # that path alone.
+        invalid = np.isfinite(core_temp) & (core_temp <= 0.0)
+        if np.any(invalid):
+            p_core = np.exp(log_p_old[kcore:]) * 1e-10          # dyn/cm^2 -> GPa
+            p_core = p_core[np.isfinite(p_core)]
+            p_tab = getattr(mantle_eos, "P_vals_sp", None)
+            limit = (f"{np.max(p_tab):.4g} GPa"
+                     if p_tab is not None else "its tabulated maximum")
+            raise ValueError(
+                f"Unphysical compact core: {int(np.count_nonzero(invalid))} of "
+                f"{core_temp.size} core cells converged to a non-positive or "
+                f"non-finite temperature. The core spans "
+                f"{np.min(p_core):.4g}-{np.max(p_core):.4g} GPa while the "
+                f"{config['core']['mantle_comp']} EOS is tabulated up to "
+                f"{limit}, so the "
+                f"temperature-continuity seeding at the envelope-core boundary "
+                f"is extrapolating far outside the table. Either switch to a "
+                f"mantle EOS that covers these pressures ([core] mantle_comp = "
+                f"mgsio3 with eos_mantle = PPV_2, which stays physical to "
+                f"~1.5e5 GPa), reduce mass_core, or run this planet coreless "
+                f"(mass_core = 0); compact cores are in any case less "
+                f"influential at these masses."
+            )
+
+    # ---------------------------------------------------------------------- #
     # Final outputs
     # ---------------------------------------------------------------------- #
     r = np.exp(r_old)
