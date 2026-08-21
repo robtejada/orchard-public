@@ -279,6 +279,23 @@ def run_invariants(res):
                          and np.array_equal(model.r_b, again.r_b)),
                     "two identical build() calls disagree")
 
+    # save() / load() must round-trip a structure exactly.
+    workdir = tempfile.mkdtemp(prefix="orchard_tests_")
+    try:
+        path = os.path.join(workdir, "roundtrip.npz")
+        model.save(path)
+        reloaded = static.load(path)
+        same = all(np.array_equal(np.asarray(getattr(model, key)),
+                                  np.asarray(getattr(reloaded, key)))
+                   for key in ("r_b", "p", "rho", "temp", "S", "Y", "Z",
+                               "m_b", "dm", "j2n"))
+        res.assert_true("save_load_roundtrip",
+                        same and reloaded.kcore == model.kcore
+                        and reloaded.radius_rj == model.radius_rj,
+                        "a saved structure did not reload identically")
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
 
 # --------------------------------------------------------------------------
 # 4. Evolution tracks

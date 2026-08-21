@@ -47,7 +47,11 @@ exactly like `z_init_coords` / `z_init_values` in a config file:
                   rotation=True, tof=True)
     print(fuzzy.j2_ppm, fuzzy.j4_ppm)
 
-Everything runs in memory; nothing is written to models/.
+Everything runs in memory; nothing is written to models/. To keep a
+structure, save it and read it back later:
+
+    jup.save("jup_static.npz")
+    jup = load("jup_static.npz")
 """
 
 import os
@@ -203,6 +207,32 @@ class StaticModel:
             s += f", J2 = {self.j2_ppm:.1f} ppm"
         return s
 
+    # -- saving --------------------------------------------------------------
+    def save(self, path):
+        """Write this structure to a .npz file.
+
+        Library mode keeps everything in memory, so use this to keep a
+        structure for later. Reload it with static.load(path), which returns
+        a StaticModel with the same fields (including .plot()).
+
+            jup.save("jup_static.npz")
+            jup2 = static.load("jup_static.npz")
+
+        The file holds plain arrays, so it can also be read without ORCHARD:
+
+            import numpy as np
+            d = np.load("jup_static.npz")
+            d["p"], d["rho"], d["temp"], ...
+        """
+        payload = {}
+        for key, value in self.__dict__.items():
+            array = np.asarray(value)
+            if array.dtype == object:          # e.g. ragged shape functions
+                continue
+            payload[key] = array
+        np.savez(path, **payload)
+        return path
+
     # -- quick-look figure ---------------------------------------------------
     def plot(self, show=True):
         """2x2 overview: rho(P), T(P), Z and S(m), m(r).
@@ -265,6 +295,19 @@ class StaticModel:
             plt.show()
             return None
         return fig
+
+
+def load(path):
+    """Read a structure written by StaticModel.save() and return a
+    StaticModel. Scalars stored as 0-d arrays are converted back."""
+    with np.load(path, allow_pickle=False) as data:
+        fields = {}
+        for key in data.files:
+            value = data[key]
+            if value.ndim == 0:
+                value = value.item()
+            fields[key] = value
+    return StaticModel(**fields)
 
 
 def build(M_Mearth=None, M_MJup=None, S=None, Y=None, Z=None, f_rock=None,
