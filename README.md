@@ -86,6 +86,21 @@ python evolution.py
 
 The run should finish in about a minute with `Evolution complete. Final data saved to: models/parameters_default`.
 
+### Regression tests
+
+`ORCHARD` ships a short test suite that pins the numbers a handful of representative calculations produce. Run it after installing, and again whenever you change the code:
+
+```bash
+python tests/run_tests.py            # everything, about two and a half minutes
+python tests/run_tests.py --quick    # static structures and EOS only, about 30 seconds
+```
+
+The suite builds seven static structures (gas giants, a sub-Neptune, a bare super-Earth, and a fuzzy core with rotation and gravity harmonics), checks EOS table lookups directly, verifies invariants that need no stored values (mass conservation, monotonic $P$ and $\rho$, hydrostatic balance, repeatability), and runs two short evolution tracks: a homogeneous gas giant and a bare super-Earth.
+
+Reference values live in `tests/reference_values.json` and are compared with relative tolerances, since floating-point results are not identical across machines, numpy builds, or BLAS versions. If a change is *meant* to move the numbers, regenerate them with `python tests/run_tests.py --update` and commit the new file alongside the change so the diff shows exactly which quantities moved.
+
+The tests need the EOS tables, so they run locally after `setup_eos.py` rather than in CI.
+
 ## Running ORCHARD
 
 ### 1. Quick Start by Planet Type
@@ -273,6 +288,7 @@ Supporting directories:
 - `opacities/` — Opacity tables for transport and transit-radius utilities
 - `utils/` — Shared utilities: constants, config parsing, TOF, diffusion coefficients, profiles, adaptive regridding
 - `parameter_examples/` — Example run configurations
+- `tests/` — Regression suite (`run_tests.py`) and its reference values
 - `tutorial_*.ipynb` — Jupyter notebook tutorials (repository root)
 
 ## Support and License

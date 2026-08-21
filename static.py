@@ -432,6 +432,23 @@ def build(M_Mearth=None, M_MJup=None, S=None, Y=None, Z=None, f_rock=None,
                 or not np.all(np.isfinite(p))):
             return None
 
+        # The relaxation can converge on (r, P) while the EOS returns
+        # unphysical temperatures in cells that sit outside its tables. The
+        # usual case is a compact core under a massive envelope, where the
+        # rock/iron EOS is asked for pressures it does not cover (see the
+        # warning in tutorial_superjupiters.ipynb). The structure is still
+        # returned, because the envelope is typically fine, but say so.
+        bad = np.flatnonzero(~(temp > 0))
+        if bad.size:
+            where = ("core/mantle" if bad.min() >= k_c else "envelope")
+            warnings.warn(
+                f"static.build: {bad.size} of {len(temp)} cells have "
+                f"non-positive temperature (first at index {int(bad.min())}, "
+                f"{where}; P there = {p[int(bad.min())] * 1e-12:.3g} Mbar). "
+                "The EOS is being evaluated outside its tabulated range; "
+                "treat that region as invalid. For massive planets, try a "
+                "smaller (or no) compact core.", stacklevel=3)
+
         return StaticModel(
             r_b=r_b, p=p, rho=rho, temp=temp, S=S_out, Y=Y_arr, Z=Z_arr,
             f_rock=fr_arr, m_b=m_b, dm=dm, kcore=k_c, kcore_fe=k_fe,

@@ -1,0 +1,72 @@
+{
+  "_note": "Reference values for tests/run_tests.py. Regenerate with: python tests/run_tests.py --update",
+  "bare_super_earth_3ME": {
+    "p_center_mbar": 10.890960001406157,
+    "radius_rj": 0.12956631517468561,
+    "t_center_k": 12072.94564491818
+  },
+  "bare_super_earth_track": {
+    "radius_re_0p05gyr": 1.0302155688998291,
+    "radius_re_0p1gyr": 1.029396064658754,
+    "radius_re_0p2gyr": 1.0284561483827472,
+    "teff_0p05gyr": 255.35838317871094,
+    "teff_0p1gyr": 255.22970581054688,
+    "teff_0p2gyr": 255.28225708007812
+  },
+  "core_t_sp": [
+    4608.3114182232075,
+    7494.469025813472
+  ],
+  "fuzzy_core_mh24": {
+    "j2_ppm": 14097.784199384289,
+    "j4_ppm": -515.0187619726738,
+    "p_center_mbar": 23.363447302358196,
+    "radius_rj": 1.1200437354120159,
+    "t_center_k": 38881.50758174796
+  },
+  "gas_giant_track": {
+    "radius_re_0p1gyr": 13.241318135494897,
+    "radius_re_0p5gyr": 11.77417455355043,
+    "radius_re_1gyr": 11.360430774054969,
+    "teff_0p1gyr": 296.9678039550781,
+    "teff_0p5gyr": 208.09445190429688,
+    "teff_1gyr": 168.35057067871094
+  },
+  "jupiter_10ME_core": {
+    "p_center_mbar": 70.74272725917686,
+    "radius_rj": 1.0300688962688496,
+    "t_center_k": 29831.726854747398
+  },
+  "jupiter_coreless": {
+    "p_center_mbar": 28.32003015060809,
+    "radius_rj": 1.0508952034925096,
+    "t_center_k": 18677.376158686544
+  },
+  "mantle_rho_sp": [
+    4.599145397167572,
+    7.138961567148761
+  ],
+  "mixture_logrho_pt": [
+    -1.8298077032894202,
+    -0.2568629278209706
+  ],
+  "mixture_logt_sp": [
+    3.253979621766004,
+    4.30634850549102
+  ],
+  "saturn_mass_0.3MJ": {
+    "p_center_mbar": 26.76537137524842,
+    "radius_rj": 0.9157849500247316,
+    "t_center_k": 20534.59311287327
+  },
+  "sub_neptune_6ME": {
+    "p_center_mbar": 22.13293292718536,
+    "radius_rj": 0.32919556239838776,
+    "t_center_k": 13217.50781587143
+  },
+  "super_jupiter_5MJ": {
+    "p_center_mbar": 789.2287881793739,
+    "radius_rj": 1.076298195720201,
+    "t_center_k": 65589.55133413491
+  }
+}
