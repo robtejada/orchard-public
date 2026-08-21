@@ -205,7 +205,14 @@ class StaticModel:
 
     # -- quick-look figure ---------------------------------------------------
     def plot(self, show=True):
-        """2x2 overview: rho(P), T(P), S(m), m(r). Returns the figure."""
+        """2x2 overview: rho(P), T(P), Z and S(m), m(r).
+
+        With show=True (the default) the figure is drawn and nothing is
+        returned, so calling this as the last line of a notebook cell shows
+        one figure rather than two (a returned Figure would be rendered a
+        second time by the notebook). Pass show=False to get the Figure back
+        for further customization instead.
+        """
         import matplotlib.pyplot as plt
 
         N = len(self.p)
@@ -256,6 +263,7 @@ class StaticModel:
                 ax.axvline(P_Mbar[kc - 1], color="0.6", lw=0.8, ls=":")
         if show:
             plt.show()
+            return None
         return fig
 
 
