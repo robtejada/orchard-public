@@ -264,7 +264,7 @@ The tutorial notebooks live at the repository root, so they import the ORCHARD m
 3. `tutorial_eos.ipynb` — Equation of state exploration
 4. `tutorial_static_structures.ipynb` — Static structure models (no evolution)
 5. `tutorial_inhomogeneous_evolution.ipynb` — Non-uniform composition profiles
-6. `tutorial_solarsystem_planets.ipynb` — Jupiter, Saturn, Uranus, Neptune
+6. `tutorial_solarsystem_planets.ipynb` — Jupiter, Saturn, Uranus
 7. `tutorial_subneptunes_superearths.ipynb` — Sub-Neptune and super-Earth workflows
 8. `tutorial_superjupiters.ipynb` — Exoplanet super-Jupiter modeling
 

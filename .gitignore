@@ -184,3 +184,6 @@ writeups/kinetic_energy_convection/# The inhomogeneous Neptune example is kept o
 # stays local for development. The homogeneous Neptune example is unaffected.
 parameter_examples/parameter_user_neptune_inhomog_struct_example1.ini
 models/parameter_user_neptune_inhomog_struct_example1/
+# The homogeneous Neptune example is also kept out of the public release.
+parameter_examples/parameter_user_neptune.ini
+models/parameter_user_neptune/

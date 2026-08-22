@@ -183,10 +183,10 @@ use the documented sentinel values (see `parameter_descriptions.md`).
 
 ## Solar-System interior evolution
 
-**Q: Can I model Jupiter, Saturn, Uranus, and Neptune?**
-Yes. Set `planet` and `bc_atm` (`c23` for Jupiter/Saturn; `g75`, Guillot 1995, for
-Uranus/Neptune). See `parameter_user_saturn_homog_noherain.ini`,
-`parameter_user_neptune.ini`, and **`tutorial_solarsystem_planets.ipynb`**.
+**Q: Can I model Jupiter, Saturn, and Uranus?**
+Yes. Set `planet` and `bc_atm` (`c23` for Jupiter/Saturn; `g75`, Graboske et al. 1975,
+for ice giants). See `parameter_user_saturn_homog_noherain.ini`,
+`parameter_user_uranus.ini`, and **`tutorial_solarsystem_planets.ipynb`**.
 
 **Q: How do I get gravitational harmonics (J2, J4) to compare with Juno/Cassini?**
 Enable rotation; the Theory-of-Figures machinery then outputs `J2, J4, J6, J8`,
