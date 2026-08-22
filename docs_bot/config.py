@@ -73,7 +73,7 @@ EMBED_MODEL_VOYAGE = "voyage-3"
 #   python -c "import anthropic;[print(m.id) for m in anthropic.Anthropic().models.list().data]"
 # ---------------------------------------------------------------------------
 LLM_MODEL = None          # None = auto-pick a valid model; or pin a specific id
-LLM_MODEL_PREFERENCE = ("sonnet", "haiku", "opus")  # auto-pick order; haiku first = cheapest
+LLM_MODEL_PREFERENCE = ("haiku", "sonnet", "opus")  # auto-pick order; haiku first = cheapest
 LLM_MAX_TOKENS = 1024
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ INDEX_META_PATH = BOT_DIR / "index_meta.json"
 # ---------------------------------------------------------------------------
 # Help links shown in fallbacks / disclaimers. Update once URLs are live.
 # ---------------------------------------------------------------------------
-REPO_URL = "https://github.com/robtejada/orchard"
+REPO_URL = "https://github.com/robtejada/orchard-public"
 ISSUES_URL = REPO_URL + "/issues"
 DISCUSSIONS_URL = REPO_URL + "/discussions"
 

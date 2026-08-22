@@ -67,8 +67,10 @@ streamlit run docs_bot/app.py
 - **Pluggable embeddings.** Default is local `sentence-transformers` (free, no
   key). Set `config.EMBED_BACKEND` to `"openai"` or `"voyage"` for hosted
   embeddings (lighter install, needs a key). Rebuild the index after changing it.
-- **Model.** `config.LLM_MODEL` defaults to a Sonnet-class Claude; switch to a
-  Haiku-class model to cut cost, or update to your preferred current alias.
+- **Model.** With `config.LLM_MODEL = None` the bot queries the models available
+  to your key and picks the first match in `config.LLM_MODEL_PREFERENCE`
+  (Haiku first, the cheapest; then Sonnet, then Opus). Reorder that tuple, or
+  pin `LLM_MODEL` to an exact model id, to change it.
 - **Links.** Update `REPO_URL` in `config.py` once the public URLs are live.
 
 ## Keeping it current
