@@ -71,7 +71,7 @@ TOL_EVOL = 1e-3
 
 # Energy-conservation residual |dE/E_rad| accepted for an evolution run. This
 # is a physics bound, not a pinned value: the residual is dominated by the
-# EOS-table Maxwell defect (see writeups/energy_conservation).
+# EOS-table Maxwell defect.
 MAX_ENERGY_RESIDUAL = 5e-2
 
 MH24_COORDS = [0.0, 0.10, 0.20, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60,

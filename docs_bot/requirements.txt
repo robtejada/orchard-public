@@ -1,6 +1,0 @@
-# docs_bot dependencies -- deliberately separate from the orchard_env
-# science stack; install into their own venv or environment.
-numpy
-sentence-transformers  # default local embedding backend (pulls torch)
-anthropic              # answer generation; needs ANTHROPIC_API_KEY
-streamlit              # only needed for the app.py web widget

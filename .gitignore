@@ -137,27 +137,7 @@ orchard_logos/
 !fig_luminosity_demo_all_masses.png
 opacities/rosseland_mean_opacities_waterrichmixtures
 water_rich_opac.py
-# writeups: track .tex/.bib sources (used by the docs assistant); ignore LaTeX
-# build products and the work-in-progress hackathon draft.
-writeups/**/*.aux
-writeups/**/*.log
-writeups/**/*.out
-writeups/**/*.bbl
-writeups/**/*.blg
-writeups/**/*.pdf
-writeups/**/*.synctex.gz
-writeups/**/*.fdb_latexmk
-writeups/**/*.fls
-writeups/**/*.cls
-writeups/**/*.bst
-writeups/**/*.BAD
-writeups/hackathon/
 orchard_paper/*
-# docs assistant (docs_bot/) generated build artifacts
-docs_bot/corpus.jsonl
-docs_bot/index_vectors.npy
-docs_bot/index_meta.json
-.botenv/
 .DS_Store
 conductivities/plot_conductivity_comparison.py
 docs/
@@ -176,9 +156,7 @@ LANDSCAPE_RESULTS.md
 # never track any parameters_* directory. parameter_examples/ and
 # parameters_default.ini remain the only committed parameter sources.
 parameters_*/
-# Local-only writeup drafts.
-writeups/jupfit_campaign/
-writeups/kinetic_energy_convection/# The inhomogeneous Neptune example is kept out of the public release: its
+# The inhomogeneous Neptune example is kept out of the public release: its
 # composition-gradient overturn is numerically marginal (the burst epoch is
 # chaotic and the run can die at the kill wall on some platforms). The file
 # stays local for development. The homogeneous Neptune example is unaffected.

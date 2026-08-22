@@ -14,9 +14,9 @@ v0.2.0 is the first fully open release of ORCHARD. The previous version (v0.1.0,
 - **Gravity-harmonics improvements**: corrected moment-of-inertia integral in TOF4.
 - **Rock-fraction-aware EOS support ([EOS v2.0](https://doi.org/10.5281/zenodo.21812109))**: aquarock water-rock core EOS, continuous water/rock core composition (`f_rock_core`), rock-mixture envelope options; fixed core EOS evaluation for rock fractions other than 0.5. THIS FEATURE IS ONLY AVAILABLE THROUGH THE ZENODO EOS MODULE. It's too large to include in the GitHub repository.
 - **More reliable initial models**: the RK4 initial-structure builder handles cored gas giants; fixed an RK4 substep density bug; fixed the rotating-initialization breakup check.
-- **Energy-accounting overhaul**: consistent lost-energy ledger, rotational kinetic energy tracked, optional midpoint gravity centering in the hydrostatic solver, optional second-order time-centered heat metering, plus an energy-conservation methods writeup.
+- **Energy-accounting overhaul**: consistent lost-energy ledger, rotational kinetic energy tracked, optional midpoint gravity centering in the hydrostatic solver, optional second-order time-centered heat metering.
 - **Solver robustness**: adaptive Henyey under-relaxation, density- and temperature-inversion guards with optional post-step repair, a timestep stall guard (`dt_abort_myr`), fixed early-age high-resolution timestepping, fixed retry accounting in the adaptive timestepper.
-- **Documentation and support**: an FAQ, Windows install notes, a fully audited `parameter_descriptions.md`, published methods writeups, and an experimental documentation assistant (`docs_bot`) with a GitHub Actions issue responder.
+- **Documentation and support**: an FAQ, Windows install notes, and a fully audited `parameter_descriptions.md`.
 - **Two new tutorials**: a getting-started notebook (`tutorial_getting_started.ipynb`) and static structure models without evolution (`tutorial_static_structures.ipynb`). The tutorial set is now eight notebooks, with more struct-profile and EOS-comparison material and exercises throughout.
 
 ## Getting Started

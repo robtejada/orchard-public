@@ -8,7 +8,7 @@ written for newcomers from four communities — **gas-giant exoplanets**,
 "Configuration", "Outputs", and "Troubleshooting" material applies to everyone.
 
 > **Can't find your answer here?** See [Getting help](#getting-help) at the
-> bottom. In short: search/ask the docs assistant, browse `parameter_examples/`
+> bottom. In short: browse `parameter_examples/`
 > and the `tutorial_*.ipynb` notebooks (repository root), read `parameter_descriptions.md`, and if you're still stuck,
 > open a **GitHub Issue** (bug/feature) or a **GitHub Discussion** (usage question).
 
@@ -296,13 +296,10 @@ Browse `parameter_examples/` — files are named by planet type, mass, and physi
 If this FAQ, `parameter_descriptions.md`, the `parameter_examples/`, and the
 the tutorial notebooks don't resolve your question:
 
-1. **Ask the docs assistant** (if deployed on the ORCHARD website / repo) — it
-   answers from this FAQ, the parameter docs, the tutorials, and the examples, and
-   links you to the source.
-2. **Search existing GitHub Issues and Discussions** — your question may already
+1. **Search existing GitHub Issues and Discussions** — your question may already
    be answered.
-3. **Open a GitHub Discussion** for usage questions ("how do I model X?").
-4. **Open a GitHub Issue** for bugs or feature requests — include your `.ini`,
+2. **Open a GitHub Discussion** for usage questions ("how do I model X?").
+3. **Open a GitHub Issue** for bugs or feature requests — include your `.ini`,
    the command you ran, the full error, and your OS / install method.
 
 When reporting a problem, the most helpful thing you can include is your **config

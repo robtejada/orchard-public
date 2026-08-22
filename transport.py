@@ -159,7 +159,6 @@ semiconvection = config['transport'].getboolean('semiconvection')
 # over-extraction during cooling).
 # Default False keeps the historical behavior bit-identical. Changes results
 # slightly when True (cooling history shifts at the 1.6e-3 * E_rad level).
-# See writeups/energy_conservation/energy_conservation_methods.tex, Sec. 6.
 time_centered_heat_factor = config['transport'].getboolean(
     'time_centered_heat_factor', fallback=False)
 if semiconvection:

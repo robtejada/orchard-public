@@ -85,7 +85,6 @@ rotation = config['hydrostatic_equilibrium'].getboolean('rotation')
 #              centering (second-order; removes the O(1/N) defect and
 #              converges observables at much lower N, but CHANGES RESULTS —
 #              ~1% radius at N=300 — so it is opt-in until fully validated).
-# See writeups/energy_conservation/energy_conservation_methods.tex.
 hse_gravity_centering = config['hydrostatic_equilibrium'].get(
     'hse_gravity_centering', fallback='legacy').strip().lower()
 if hse_gravity_centering not in ('legacy', 'midpoint'):
