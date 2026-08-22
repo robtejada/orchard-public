@@ -1739,7 +1739,7 @@ def update_SYZ(
     # derivatives at the cap value makes the Newton solve dramatically
     # stiffer through convective-overturn epochs (timestep collapse).  Such
     # models should set [transport] eos_deriv_z_cap = 1.0 (cap disabled) --
-    # see the Uranus/Neptune inhomogeneous example configs.
+    # see the Uranus inhomogeneous example config.
     Zold_d = np.minimum(Zold, eos_deriv_z_cap)
     Zold_d_i = np.minimum(Zold_i, eos_deriv_z_cap)
 

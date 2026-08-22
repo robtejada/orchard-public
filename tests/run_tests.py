@@ -58,10 +58,16 @@ import numpy as np                                            # noqa: E402
 
 # Relative tolerances. Static structures are a single converged solve and
 # reproduce tightly; evolution endpoints accumulate thousands of adaptive
-# steps and drift more between platforms.
+# steps and drift more between platforms. Measured cross-platform drift
+# (references from macOS/Accelerate, checked on Della/Linux): statics and the
+# gas-giant track reproduce to <1e-9, while the rocky track drifts up to
+# ~5e-4 -- libm/BLAS differences perturb the adaptive timestep sequence, and
+# the nearest-snapshot age comparison turns that into a few-e-4 jitter. 1e-3
+# clears that with 2x headroom while still catching real regressions, which
+# move these numbers by percents.
 TOL_STATIC = 1e-6
 TOL_EOS = 1e-8
-TOL_EVOL = 1e-4
+TOL_EVOL = 1e-3
 
 # Energy-conservation residual |dE/E_rad| accepted for an evolution run. This
 # is a physics bound, not a pinned value: the residual is dominated by the
