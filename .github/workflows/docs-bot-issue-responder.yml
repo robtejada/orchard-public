@@ -3,7 +3,7 @@ name: ORCHARD docs bot — issue responder
 # Posts an AI first-pass answer (grounded in the public docs) on each newly
 # opened issue, and points users to the docs / a maintainer.
 #
-# Requires the repository secret ANTHROPIC_API_KEY. Commenting uses the default
+# Requires the repository secret SECRET_ANTHROPIC_API_KEY (exposed to the script as ANTHROPIC_API_KEY). Commenting uses the default
 # GITHUB_TOKEN. The `issues` event does not fire for pull requests.
 #
 # To gate on a label instead of every issue, change the trigger to
@@ -46,7 +46,7 @@ jobs:
 
       - name: Generate first-pass answer
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.SECRET_ANTHROPIC_API_KEY }}
         run: python docs_bot/answer_issue.py
 
       - name: Post comment (only if an answer was produced)
