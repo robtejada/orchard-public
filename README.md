@@ -4,14 +4,10 @@
 
 ORCHARD (Tejada Arevalo et al. 2026b) is a public, general-purpose planetary interior structure and evolution code derived from APPLE ([Sur et al. 2024](https://iopscience.iop.org/article/10.3847/1538-4357/ad57c3)). It models the thermal and compositional evolution of planets over Gyr timescales, solving for hydrostatic structure via Henyey relaxation and for coupled thermal/compositional transport with helium rain modeled with diffusion-advection. While the gas-giant evolution part of the code is inherited from APPLE, the rocky-planet evolution code is inspired by the CMAPPER evolution code ([Zhang et al. 2022](https://iopscience.iop.org/article/10.3847/1538-4357/ac8e65)). CMAPPER is found [here](https://github.com/zhangjis/CMAPPER_rock).
 
-**Current release: v0.2.0**, the first full public release. See [What's new in v0.2.0](#whats-new-in-v020).
-
 ## What's new in v0.2.0
 
 v0.2.0 is the first fully open release of ORCHARD. The previous version (v0.1.0, the version submitted with the ORCHARD paper) was deposited on Zenodo with restricted file access during peer review. Changes since v0.1.0:
 
-- **Metal (Z) rain**: a heavy-element miscibility channel that parallels helium rain, with selectable miscibility curves, independent temperature/pressure offsets, supersaturation-responsive rain-zone diffusion, and a deep-pressure activation cap (`zmisc_p_max`).
-- **Gravity-harmonics improvements**: corrected moment-of-inertia integral in TOF4.
 - **Rock-fraction-aware EOS support ([EOS v2.0](https://doi.org/10.5281/zenodo.21812109))**: aquarock water-rock core EOS, continuous water/rock core composition (`f_rock_core`), rock-mixture envelope options; fixed core EOS evaluation for rock fractions other than 0.5. THIS FEATURE IS ONLY AVAILABLE THROUGH THE ZENODO EOS MODULE. It's too large to include in the GitHub repository.
 - **More reliable initial models**: the RK4 initial-structure builder handles cored gas giants; fixed an RK4 substep density bug; fixed the rotating-initialization breakup check.
 - **Energy-accounting overhaul**: consistent lost-energy ledger, rotational kinetic energy tracked, optional midpoint gravity centering in the hydrostatic solver, optional second-order time-centered heat metering.
