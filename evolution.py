@@ -767,7 +767,14 @@ def run():
             # closure read on the normal path (UnboundLocalError).
             t1000 = t1000_bar
             p_core = _cell_value_or_last(p_now, kcore)
-            if p_core > 990000000: # in case the core pressure exceeds table limits, use the max pressure of the envelope
+            if p_core < 990000000:
+                # The envelope is too thin to reach the tables' 1 kbar
+                # reference level: the 1 kbar surface would fall inside the
+                # core/mantle, where no envelope T(P) exists.  Fall back to
+                # the deepest envelope cell.  (Normal, thicker envelopes are
+                # sampled at 1 kbar via t1000_bar above, which is the axis
+                # the tables are built on and matches the Jacobian path in
+                # transport.py.)
                 p_last_env = p_now[kcore - 1]
                 t1000 = t_p_interp(p_last_env)
             # Cap Z at 0.94 before computing the Fortney+2007 metallicity
