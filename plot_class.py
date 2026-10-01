@@ -1208,7 +1208,8 @@ class init_plot:
             temp_log_ax.set_xlabel(r'Pressure [GPa]')
             temp_log_ax.set_ylabel(r'Temperature [K]')
             temp_log_ax.set_xlim(1e-4, 1e4)
-            temp_log_ax.set_ylim(100, max(_tlim_kK + 2.0, 2.0) * 1e3)
+            #temp_log_ax.set_ylim(100, max(_tlim_kK + 2.0, 2.0) * 1e3)
+            temp_log_ax.set_ylim(100, 2e5)
             temp_log_ax.invert_xaxis()
 
         if flux_ax is not None:

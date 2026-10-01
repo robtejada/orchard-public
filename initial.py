@@ -286,9 +286,9 @@ if prev_key != key:
         del builtins._APPLE_mixtures_eos
     builtins._APPLE_prev_eos_key = key
 
-print('Loading EOS ...')
 # --- Initialize H-He-Z EOS class in builtins if not cached ---
 if not hasattr(builtins, "_APPLE_mixtures_eos"):
+    print('Loading EOS ...')
     from eos.check_eos_data import verify_eos_data
     verify_eos_data()
 

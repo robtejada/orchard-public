@@ -5,7 +5,9 @@ reloading eos module
 Usage:
 python orchard_cli.py
 
-Then type in the name of the parameters file you want to run
+Then type in the name of the parameters file you want to run.
+Append --init to run only the first (initial hydrostatic) timestep, save it,
+and stop, e.g. `parameter_caden_jupiters/foo.ini --init`
 
 It will reread the params file, reload all modules in RELOAD_MODULES,
 evolution.py, then rerun the code as if you'd typed
@@ -26,8 +28,11 @@ except:
 import traceback
 import os
 import sys
-import evolution
 import importlib
+# evolution is imported lazily on the first run: importing it here would build
+# the EOS for the default config, which is then thrown away if the chosen
+# params file uses a different EOS.
+evolution = None
 
 # reloaded in order for every specified params file (evolution.py will always be
 # reloaded at end)
@@ -71,6 +76,7 @@ while True:
             print(f'Folder "{folder}" does not exist.')
     elif inline == 'help':
         print('\tFuzzy-search for parameters file to run using evolution.py')
+        print('\t- Append "--init" to the filename to run only the first timestep')
         print('\t- Keywords include: ["break", "ls", "help"]')
     elif inline.startswith('reload'):
         # reload by filename (with or without ".py"; just in case...)
@@ -78,7 +84,11 @@ while True:
         module_name = MODULE_ALIASES.get(module_name, module_name)
         importlib.reload(importlib.import_module(module_name))
     else:
-        print('Trying to run for filename', inline)
+        # optional trailing "--init": run only the first timestep, then stop
+        init_only = inline.endswith('--init')
+        if init_only:
+            inline = inline[:-len('--init')].strip()
+        print('Trying to run for filename', inline, '(--init)' if init_only else '')
         try:
             # allow fuzzy search for filenames
             folder, filename = os.path.split(inline)
@@ -99,10 +109,13 @@ while True:
                     print('Did not find for', filename)
                     inline = os.path.join(folder, searchfn)
 
-            sys.argv = [sys.argv[0], '--config', inline]
+            sys.argv = [sys.argv[0], '--config', inline] + (['--init'] if init_only else [])
             for m in RELOAD_MODULES:
                 importlib.reload(importlib.import_module(m))
-            importlib.reload(evolution)
+            if evolution is None:
+                import evolution
+            else:
+                importlib.reload(evolution)
             evolution.run()
         except:
             print(traceback.print_exc())
