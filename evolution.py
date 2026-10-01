@@ -1312,6 +1312,11 @@ def run():
                 t += dt_
                 omega_old = omega
 
+                if args.init:
+                    L_int = 4.0 * np.pi * r_b_old[0]**2 * const.sigma_sb * T_int**4  # for the final summary
+                    logger.info("--init: initial timestep saved; stopping before the first evolution step.")
+                    break
+
             # ========== SUBSEQUENT TIMESTEPS ========== #
             else:
                 T_int_transport_in = T_int
@@ -2631,7 +2636,7 @@ def run():
             (deltaE_hse_bsurf, deltaE_hse_bsurf_loss,
              energy_residual_hse_bsurf) = _residual_triplet(uf_rot, egf, e0, energy_lost_hse_bsurf)
 
-        _elapsed = now - program_starts
+        _elapsed = time.time() - program_starts
         _h, _rem = divmod(_elapsed, 3600)
         _m, _s = divmod(_rem, 60)
         _age_final = (t - dt_) * const.s_to_Myr / 1e3

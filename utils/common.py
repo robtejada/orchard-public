@@ -74,6 +74,7 @@ if LIBRARY_MODE:
         clean=False,
         plot_end=False,
         plot_active=False,
+        init=False,
     )
     config = configparser.ConfigParser()
     if os.path.exists(BASE_CONFIG):
@@ -125,6 +126,9 @@ else:
                         action="store_true")
     parser.add_argument("-plot_active", "--plot_active",
                         help="Generate still_plot frames during the evolution at each save step",
+                        action="store_true")
+    parser.add_argument("--init", "-init",
+                        help="Run only the initial hydrostatic-equilibrium step, save it, and exit",
                         action="store_true")
     args = parser.parse_args()
     config = configparser.ConfigParser()
