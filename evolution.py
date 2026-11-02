@@ -727,7 +727,7 @@ def run():
         np.savetxt(os.path.join(folder_name, 'Z1m.txt'), Z1m_arr, fmt='%.8e')
         np.savetxt(os.path.join(folder_name, 'Z2m.txt'), Z2m_arr, fmt='%.8e')
 
-    def _atm_boundary_tint_teff(p_now, temp_now, Z_now, T_emb_now,
+    def _atm_boundary_tint_teff(p_now, temp_now, Z_now, T_top_now,
                                 enforce_g75_planet=False):
         """Evaluate the atmosphere boundary condition -> (T_int, T_eff).
 
@@ -736,9 +736,11 @@ def run():
         drift apart). S_atm, Y_atm, Z_atm, g, t1_bar, t10_bar, t1000_bar and
         t_p_interp are read from the enclosing scope at call time; the state
         arrays that differ between the call sites (p/temp/Z vs
-        p_new/temp_new/Z_new) and the envelope-mantle boundary temperature
-        enter as parameters. enforce_g75_planet reproduces the initial-step
-        check rejecting g75 for Jupiter/Saturn.
+        p_new/temp_new/Z_new) and the top-cell temperature enter as
+        parameters. T_top_now is what bare/gray/ideal_gray radiate from, the
+        same cell transport.py cools through: the rock surface for a bare
+        planet, the 1-bar level for a thin envelope. enforce_g75_planet
+        reproduces the initial-step check rejecting g75 for Jupiter/Saturn.
         """
         if BC_atm == 'c23' and y_atm_fixed:
             return atm.get_tint_teff(S_atm, np.log10(g), Y_atm, Z_atm)
@@ -777,18 +779,18 @@ def run():
                 # transport.py.)
                 p_last_env = p_now[kcore - 1]
                 t1000 = t_p_interp(p_last_env)
-            # Cap Z at 0.94 before computing the Fortney+2007 metallicity
-            # factor: the f07 atmosphere tables become unreliable beyond this
-            # point, so clipping here keeps the BC lookup inside its trusted
-            # range rather than extrapolating.
+            # The f07 grid spans 1-100x solar (Z/X), i.e. Z ~ 0.015-0.61;
+            # f07_atm.get_tint clamps the factor to that range, so any
+            # Z > ~0.61 is looked up as 100x solar. The 0.94 cap only keeps
+            # Z/(1-Z) finite before that clamp.
             f_Z = z_to_metallicity_factor(np.clip(Z_now[0], 0.0, 0.94), const.Z_SOLAR_FORTNEY07)
             return atm.get_tint_teff(np.log10(g), np.log10(t1000), mh_ = f_Z)
         elif BC_atm == 'bare':
-            return atm.get_tint_teff(T_surf=T_emb_now)
+            return atm.get_tint_teff(T_surf=T_top_now)
         elif BC_atm == 'gray':
-            return atm.get_tint_teff(T_surf=T_emb_now, g=g)
+            return atm.get_tint_teff(T_surf=T_top_now, g=g)
         elif BC_atm == 'ideal_gray':
-            return atm.get_tint_teff(T_surf=T_emb_now, g=g)
+            return atm.get_tint_teff(T_surf=T_top_now, g=g)
         else:
             raise Exception('Atmospheric boundary condition name error.')
 
@@ -1102,7 +1104,6 @@ def run():
                 t1_bar = t_p_interp(1e6)
                 t10_bar = t_p_interp(1e7)
                 t1000_bar = t_p_interp(990000000)
-                T_emb = _cell_value_or_last(temp, kcore)
 
                 pbase1 = 10  # bars
                 pbase2 = 30  # bars
@@ -1114,8 +1115,12 @@ def run():
                 Y_atm = np.mean(Y[cond]) if not y_atm_fixed else Y_atm_bc
                 Z_atm = np.mean(Z[cond]) if not z_atm_fixed else Z_atm_bc
 
+                # temp[0] matches the main loop's temp_new[0]. Passing the
+                # envelope-mantle boundary temperature here (as before
+                # v0.2.1) reported the mantle-top T_int (~4600 K) for
+                # thin-envelope gray models whose first step has T_int = 0.
                 T_int, T_eff = _atm_boundary_tint_teff(
-                    p, temp, Z, T_emb, enforce_g75_planet=True)
+                    p, temp, Z, temp[0], enforce_g75_planet=True)
 
                 assert_all_not_nan(T_int, T_eff, temp, p, r_b, rho, S, Y, Z, f_rock)
 
@@ -1998,8 +2003,9 @@ def run():
                     t10_bar = t_p_interp(1e7)
                     t1000_bar = t_p_interp(990000000)
 
-                    # (bare/gray/ideal_gray use the just-updated surface
-                    #  temperature as the envelope-mantle boundary value.)
+                    # (bare/gray/ideal_gray use the just-updated top-cell
+                    #  temperature: the rock surface for a bare planet,
+                    #  the 1-bar level for a thin envelope.)
                     # A failed S->Tint inversion means the accepted trial
                     # state's surface entropy left the atmosphere table's
                     # invertible range (seen in violent late-time surface

@@ -144,8 +144,31 @@ escape-driven evolution, please note this limitation and watch the repo / open a
 Discussion to ask about status.
 
 **Q: How do I set irradiation for a close-in planet?**
-Use `T_eq` (and `bond_albedo`) with the `f07` or gray atmosphere models. The
-equilibrium temperature controls the irradiated boundary.
+Use `T_eq` with `bc_atm = f07` (`bond_albedo` converts `T_eq` into the tables'
+incident flux). Avoid `bc_atm = gray` for strongly irradiated H/He envelopes: it
+matches at 1 bar and sets T_int⁴ = max(T(1 bar)⁴ − T_eq⁴, 0), so once the
+envelope's 1-bar temperature reaches T_eq the planet stops cooling, and an
+envelope that starts below it never cools at all.
+
+**Q: How do I choose the initial entropy `S_ini` for a sub-Neptune?**
+Choose it from the temperature you want at the boundary condition's matching
+level, for your envelope composition. The same `S_ini` means very different
+temperatures at different `Z`: S = 7.5 k_B/baryon is a cool H/He envelope but
+puts a Z = 0.65 envelope near 18,000 K at 1 kbar. For `f07` (matched at 1 kbar)
+you need T(1 kbar) above roughly 1500 K at T_eq = 800 K for any intrinsic flux,
+and ~3000–5000 K for a hot start. For `gray`, `S_ini` must exceed
+S(1 bar, T_eq) (8.46 for H/He at T_eq = 800 K, 6.79 at 255 K). You can compute
+S(P, T) with the envelope EOS, `eos.get_s_pt(log10 P[dyn/cm²], log10 T, Y, Z)`
+(returns erg/g/K; divide by k_B/m_u = 8.314e7 for k_B/baryon). Then check the
+initial model with `python evolution.py --config <file> --init`, which builds
+and saves the first timestep and stops.
+
+**Q: What envelope metallicity range is supported?**
+The default EOS tables (`eos_version = 1.0`, `z_eos = aqua`) cover Z = 0–0.99
+and S = 1–10 k_B/baryon; above Z = 0.99 values are extrapolated. EOS v2.0
+(`eos_version = 2.0`, `z_eos = aqua_revised`) reaches Z = 1.0 but starts at
+S = 2.0, which is too hot a floor for cool steam envelopes. The `f07` atmosphere
+tables stop at 100× solar (Z ≈ 0.61); higher Z is looked up as 100× solar.
 
 ---
 
@@ -170,9 +193,11 @@ the melt fraction is an output field. The mantle conductivity/viscosity follow
 standard models (see `parameter_descriptions.md`).
 
 **Q: Can a rocky planet have a thin atmosphere?**
-Yes — use `bc_atm = rock_gray` or `ideal_gray` and a small envelope. See the
+Yes — use `bc_atm = gray` or `ideal_gray` and a small envelope. See the
 `*thinenv*` examples (e.g.,
-`parameter_user_super_earth_3Mearth_thinenv_example.ini`).
+`parameter_user_super_earth_3Mearth_thinenv_example.ini`). These ship with
+T_eq = 255 K. If you raise T_eq, raise `S_ini` above S(1 bar, T_eq) as well
+(see the sub-Neptune `S_ini` question above), or switch to `f07`.
 
 **Q: How do I set the mantle and iron-core sizes?**
 `mass_core` is the mantle+core mass and `mass_core_fe` is the iron-core mass (both

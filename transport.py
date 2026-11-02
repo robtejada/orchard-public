@@ -1285,10 +1285,10 @@ def update_SYZ(
         frock_t1000  = float(frock_func(10.0**target_logP))
         #dT10dS = mixtures_eos.get_dtds_sp(S10, 7, Yold[t10_id], Zold[t10_id], f_rock_old[t10_id])
         dT1000dS = mixtures_eos.get_dtds_sp(S1000, target_logP, Yold_t1000, Zold_t1000, frock_t1000)
-        # Fortney+07 tables use their own solar reference. Cap Z at 0.94 before
-        # building the metallicity factor: the f07 lookup becomes unreliable
-        # above that, so clipping here keeps the derivative consistent with
-        # the BC evaluation in evolution.py.
+        # Fortney+07 tables use their own solar reference. The grid spans
+        # 1-100x solar (Z ~ 0.015-0.61) and f07_atm clamps to it, so Z above
+        # ~0.61 is looked up as 100x solar. The 0.94 cap matches evolution.py
+        # and only keeps Z/(1-Z) finite.
         f_Z = z_to_metallicity_factor(np.clip(Zold_t1000, 0.0, 0.94), const.Z_SOLAR_FORTNEY07)
         dTint_dT1000 = atm.get_dtintdt1000(np.log10(g), np.log10(T1000), f_Z)
         dTdS = dTint_dT1000 * dT1000dS * norm

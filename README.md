@@ -1,8 +1,18 @@
-# ORCHARD: A General Planetary Evolution Code [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22035834.svg)](https://doi.org/10.5281/zenodo.22035834)
+# ORCHARD: A General Planetary Evolution Code [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19829061.svg)](https://doi.org/10.5281/zenodo.19829061)
 
 [![ORCHARD logo](orchard_logo.png)](orchard_logo.png)
 
 ORCHARD (Tejada Arevalo et al. 2026b) is a public, general-purpose planetary interior structure and evolution code derived from APPLE ([Sur et al. 2024](https://iopscience.iop.org/article/10.3847/1538-4357/ad57c3)). It models the thermal and compositional evolution of planets over Gyr timescales, solving for hydrostatic structure via Henyey relaxation and for coupled thermal/compositional transport with helium rain modeled with diffusion-advection. While the gas-giant evolution part of the code is inherited from APPLE, the rocky-planet evolution code is inspired by the CMAPPER evolution code ([Zhang et al. 2022](https://iopscience.iop.org/article/10.3847/1538-4357/ac8e65)). CMAPPER is found [here](https://github.com/zhangjis/CMAPPER_rock).
+
+## What's new in v0.2.1
+
+v0.2.1 is a maintenance release. Changes since v0.2.0:
+
+- **Correct initial T_int for `bare`, `gray`, and `ideal_gray`**: the initial model summary and the first saved snapshot (`T_int`, `T_eff`, `int_lum`) now use the same top-cell temperature as the evolution. Previously, thin-envelope `gray` models reported the mantle-top value (~4600 K) at t = 0 even when the first step radiated nothing. Later timesteps are unchanged.
+- **New `--init` flag**: `python evolution.py --config <file> --init` builds the initial model, saves it, and stops, for checking initial conditions. It also works in `orchard_cli.py`, which no longer reloads the EOS on every run.
+- **Boundary-condition documentation**: `gray` is now described as implemented (photosphere at the top cell; `rock_gray_kappa_ir` and `rock_gray_p_match_bar` are used only by `ideal_gray`). `bond_albedo` is documented as used only by `f07`. `rock_gray` is corrected to `gray` in the FAQ and `parameter_descriptions.md`. The `f07` metallicity range is stated explicitly (1–100× solar, so envelopes above Z ≈ 0.61 are looked up as 100× solar).
+- **Initial-entropy guidance**: new FAQ entries on choosing `S_ini` for sub-Neptunes and irradiated super-Earths, and on the supported envelope metallicity range. The thin-envelope section of `tutorial_subneptunes_superearths.ipynb` explains why `gray` cannot cool a planet whose 1-bar temperature is below `T_eq`.
+- Fixed log-temperature axis range in the age plots; the Solar System tutorial was re-run.
 
 ## What's new in v0.2.0
 
@@ -25,13 +35,13 @@ Install [Conda](https://docs.conda.io/) (Miniconda or Anaconda).
 
 ### Install from Zenodo (recommended)
 
-We highly recommend installing `orchard` v0.2.0 from the Zenodo release archive from [Zenodo](https://doi.org/10.5281/zenodo.22035834). This version is the same as the one released here under orchard-public. Zenodo is recommended because the equation of state (EOS) submodule is quite large (~30 GB, compressed), so cloning through GitHub consumes Git LFS space, which is limited.
+We highly recommend installing `orchard` v0.2.1 from the Zenodo release archive from [Zenodo](https://doi.org/10.5281/zenodo.19829061). This version is the same as the one released here under orchard-public. Zenodo is recommended because the equation of state (EOS) submodule is quite large (~30 GB, compressed), so cloning through GitHub consumes Git LFS space, which is limited.
 
 Extract orchard and set up the environment like so:
 
 ```bash
-unzip orchard-v0.2.0.zip
-cd orchard-v0.2.0
+unzip orchard-v0.2.1.zip
+cd orchard-v0.2.1
 conda env create -f environment.yaml
 conda activate orchard_env
 python setup_eos.py

@@ -1118,13 +1118,18 @@ class rock_gray_atm:
     """
     Semi-gray radiative atmosphere for rocky planets.
 
-    Uses an Eddington-style relation at a matching pressure P_match:
-        T_surf^4 = T_eq^4 + (3/4) * T_int^4 * (tau_match + 2/3)
-        tau_match = kappa_ir * P_match / g
+    Eddington relation T^4 = T_eq^4 + (3/4) T_int^4 (tau + 2/3) evaluated
+    at the photosphere, tau = 2/3, which is placed at the top model cell:
+        T_int^4 = max(T_surf^4 - T_eq^4, 0)
+    kappa_ir and P_match are accepted for interface compatibility with
+    ideal_gray_atm but are not used. T_int is zero whenever T_surf <= T_eq,
+    so an envelope can never cool below S(P_top, T_eq); this BC is meant
+    for cool planets, not strongly irradiated H/He envelopes (use f07).
 
     Inputs:
-      - T_surf: temperature at the top model cell [K]
-      - g:      surface gravity [cm/s^2]
+      - T_surf: temperature at the top model cell [K] (the rock surface,
+                or the 1-bar level of a thin envelope)
+      - g:      surface gravity [cm/s^2] (unused)
 
     Outputs:
       - T_int: intrinsic temperature used in L_int = 4*pi*R^2*sigma*T_int^4
