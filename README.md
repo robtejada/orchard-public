@@ -12,7 +12,7 @@ v0.2.1 is a maintenance release. Changes since v0.2.0:
 - **New `--init` flag**: `python evolution.py --config <file> --init` builds the initial model, saves it, and stops, for checking initial conditions. It also works in `orchard_cli.py`, which no longer reloads the EOS on every run.
 - **Boundary-condition documentation**: `gray` is now described as implemented (photosphere at the top cell; `rock_gray_kappa_ir` and `rock_gray_p_match_bar` are used only by `ideal_gray`). `bond_albedo` is documented as used only by `f07`. `rock_gray` is corrected to `gray` in the FAQ and `parameter_descriptions.md`. The `f07` metallicity range is stated explicitly (1–100× solar, so envelopes above Z ≈ 0.61 are looked up as 100× solar).
 - **Initial-entropy guidance**: new FAQ entries on choosing `S_ini` for sub-Neptunes and irradiated super-Earths, and on the supported envelope metallicity range. The thin-envelope section of `tutorial_subneptunes_superearths.ipynb` explains why `gray` cannot cool a planet whose 1-bar temperature is below `T_eq`.
-- Fixed log-temperature axis range in the age plots; the Solar System tutorial was re-run.
+- Fixed log-temperature axis range in the age plots; the Solar System and sub-Neptune/super-Earth tutorials were re-run with v0.2.1.
 
 ## What's new in v0.2.0
 
